@@ -1,0 +1,27 @@
+From 3449dd58cbbb28d6d0b89740b68ae158b08d0b1c Mon Sep 17 00:00:00 2001
+From: Jonathan Lebon <jlebon@redhat.com>
+Date: Tue, 21 Jan 2014 16:14:21 -0500
+Subject: [PATCH] PR16478: always use dwarf for labels
+
+Now that the symtab is queried more often for function probes, we need
+to explicitly make .label queries use dwarf or they won't work properly.
+---
+ tapsets.cxx | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/tapsets.cxx b/tapsets.cxx
+index d8e8cf7..5bae070 100644
+--- a/tapsets.cxx
++++ b/tapsets.cxx
+@@ -1296,7 +1296,7 @@ dwarf_query::assess_dbinfo_reqt()
+       // kernel.statement(NUM).absolute
+       return dbr_none;
+     }
+-  if (has_inline)
++  if (has_inline || has_label)
+     {
+       // kernel.function("f").inline or module("m").function("f").inline
+       return dbr_need_dwarf;
+-- 
+1.8.3.1
+

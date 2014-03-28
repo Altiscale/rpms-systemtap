@@ -1,0 +1,803 @@
+From 2512f77547e7a4b9bbfd46c01c5b2ded2c171cf3 Mon Sep 17 00:00:00 2001
+From: Jonathan Lebon <jlebon@redhat.com>
+Date: Wed, 27 Nov 2013 11:21:02 -0500
+Subject: BZ1051649: backport boot-time probing feature
+
+---
+ configure.ac                         |   3 +-
+ initscript/99stap/module-setup.sh.in |  36 ++++++
+ initscript/99stap/start-staprun.sh   |  26 ++++
+ initscript/README.systemtap          | 108 ++++++++++++++--
+ initscript/config.systemtap.in       |   3 +
+ initscript/systemtap.in              | 230 +++++++++++++++++++++++++++++++++--
+ systemtap.spec                       |  39 ++++--
+ tapset-utrace.cxx                    |   9 --
+ 8 files changed, 413 insertions(+), 41 deletions(-)
+ create mode 100644 initscript/99stap/module-setup.sh.in
+ create mode 100644 initscript/99stap/start-staprun.sh
+ mode change 100644 => 100755 initscript/systemtap.in
+
+diff --git a/configure.ac b/configure.ac
+index 56c3b88..3d6b50b 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -681,7 +681,8 @@ AC_CONFIG_FILES([Makefile doc/Makefile man/Makefile \
+ doc/beginners/Makefile doc/SystemTap_Tapset_Reference/Makefile \
+ man/stappaths.7 \
+ initscript/config.systemtap initscript/config.stap-server \
+-initscript/systemtap initscript/stap-server ])
++initscript/systemtap initscript/stap-server \
++initscript/99stap/module-setup.sh ])
+ AC_CONFIG_SUBDIRS(testsuite)
+ if test $enable_translator == "yes"; then
+ 	AC_CONFIG_FILES([run-stap], [chmod +x run-stap])
+diff --git a/initscript/99stap/module-setup.sh.in b/initscript/99stap/module-setup.sh.in
+new file mode 100644
+index 0000000..4f4583d
+--- /dev/null
++++ b/initscript/99stap/module-setup.sh.in
+@@ -0,0 +1,36 @@
++#!/bin/bash
++
++# NB: $moddir only works in install()
++. @prefix@/lib/dracut/modules.d/99stap/params.conf
++
++# Return 0 --> install stap module
++# Return 1 --> skip stap module
++check() {
++   # Install it if we have early-boot scripts
++   [ "$ONBOOT_SCRIPTS" ] && return 0
++   return 1
++}
++
++# We don't depend on anything
++depends() {
++   echo ""
++}
++
++install() {
++
++   # These programs are very likely to already be included by other
++   # dracut modules so we're really not adding any weight
++   dracut_install bash mkdir
++
++   # The real payload...
++   inst "$STAPRUN"
++   inst "$STAPIO"
++   for script in $ONBOOT_SCRIPTS; do
++      inst "$CACHE_PATH/$script.ko"
++   done
++
++   # start-staprun.sh will need a copy of params.conf
++   inst_simple "$moddir/params.conf" "/etc/systemtap-params.conf"
++   inst_hook cmdline 01 "$moddir/start-staprun.sh"
++}
++
+diff --git a/initscript/99stap/start-staprun.sh b/initscript/99stap/start-staprun.sh
+new file mode 100644
+index 0000000..efb4d2f
+--- /dev/null
++++ b/initscript/99stap/start-staprun.sh
+@@ -0,0 +1,26 @@
++#!/bin/bash
++
++# Inserts the SystemTap modules using staprun.
++
++. /etc/systemtap-params.conf
++
++# From here, we can access /var/run (or rather what it will link to),
++# but because $STAT_PATH is user-configurable, we're not guaranteed that
++# it will be /var/run.  Regardless, we can't have access to the final
++# root so we make do and write to /var/run/systemtap anyway. The init
++# script will take care of moving the PID files to the real directory if
++# necessary.
++PIDDIR=/run/systemtap
++mkdir -p $PIDDIR
++
++for script in $ONBOOT_SCRIPTS; do
++   pid=$PIDDIR/$script
++   eval opts=\$${script}_OPT
++   if [ $LOG_BOOT_ERR -eq 1 ]; then
++      $STAPRUN $opts $CACHE_PATH/$script.ko 2> $PIDDIR/$script.log
++   else
++      $STAPRUN $opts $CACHE_PATH/$script.ko
++   fi
++   echo 0 > $pid
++done
++
+diff --git a/initscript/README.systemtap b/initscript/README.systemtap
+index d583d72..9dd1ee6 100644
+--- a/initscript/README.systemtap
++++ b/initscript/README.systemtap
+@@ -23,8 +23,8 @@ will be useful for users who use -DRELAY_HOST and -DRELAY_GUEST.
+ ========
+ 2.1 Synopsis
+ 
+-/sbin/service systemtap {start|stop|restart|status|compile|cleanup} \
+-	[-r kernelrelease] [-c config] [-R] [-y] [script(s)]
++/sbin/service systemtap {start|stop|restart|status|compile|onboot|cleanup} \
++   [-r kernelrelease] [-o path.img] [-b] [-c config] [-R] [-y] [script(s)]
+ 
+ 2.2 Commands
+  You have to specify one of the below commands.
+@@ -57,9 +57,29 @@ will be useful for users who use -DRELAY_HOST and -DRELAY_GUEST.
+  Compile script(s) on the specified kernel. This command takes '-r' option
+  which specifies the release of the kernel(see 2.3.4) on which you would
+  like to compile script(s). This command asks user whether it can overwrite
+-existing caches.
++ existing caches.
+ 
+-2.2.6 cleanup
++2.2.6 onboot
++ Make script(s) part of the initramfs so that they are started earlier during
++ the boot process. Only works on dracut-based systems. This command also takes
++ the '-r' option. If '-r' is omitted, the initramfs is created for the running
++ kernel. If '-o path.img' is given, the initramfs is created at 'path.img' (must
++ be an absolute path).  Otherwise, defaults to '/boot/initramfs-KVER.img', where
++ KVER is `uname -r` if the '-r' option is omitted, or the given kernel version
++ otherwise.
++
++ If the output file already exists, it is overwritten, unless the -b switch is
++ given, in which case the file is appended '.bak' rather than overwritten. Note
++ however that if a '.bak' version already exists, it will not be overwritten.
++
++ If no scripts are specified on the command-line, the initramfs will be created
++ without including any scripts at all (i.e. no extra systemtap files added).
++
++ Warning: do not use the stap -o option with onboot scripts because the
++ script is started before the root filesystem is even mounted. Increase the
++ buffer size if more space is needed.
++
++2.2.7 cleanup
+  Cleanup compiled script(s) from cache directory(see 3.4). This command also
+  takes '-r' option. If '-r' option is omitted, cleanup all caches for running
+  kernel. This command asks user whether it can remove caches.
+@@ -75,8 +95,8 @@ existing caches.
+ 2.3.2 script(s)
+  You can specify individual scripts to the commands. If you omit to specify
+  any script, systemtap initscript will execute the command with all scripts
+- in the script directory(except 'start' and 'stop' command, see 2.2.1 and
+- 2.2.2).
++ in the script directory (except 'start', 'stop', and 'onboot' commands, see
++ 2.2.1, 2.2.2, and 2.2.6).
+ 
+ 2.3.3 -R
+  If this option is specified, systemtap initscript will try to solve
+@@ -85,11 +105,22 @@ existing caches.
+ 
+ 2.3.4 -r kernelrelease
+  You can specify release version of the kernel(e.g. 2.6.26.1). This option
+- is valid only with compile and cleanup commands.
++ is valid only with compile, onboot, and cleanup commands.
+ 
+ 2.3.5 -y
+  Answer yes for all questions.
+ 
++2.3.6 -o path.img
++ Specify the path of the initramfs image. Otherwise, the default is
++ '/boot/initramfs-KVER.img', where KVER is `uname -r` if the '-r' option is
++ omitted, or the given kernel version otherwise. This option is only valid with
++ the onboot command.
++
++2.3.7 -b
++ If present, will backup an existing initramfs image by renaming it with a
++ '.bak' extension. Otherwise, the initramfs is overwritten without backing up.
++ This option is only valid with the onboot command.
++
+ 2.4 Misc
+ 2.4.1 Service Priority
+  Each initscript has execution priority. Since user would like to trace
+@@ -147,9 +178,16 @@ existing caches.
+  Some error and warning messages are also sent to console and syslogd (syslog
+  output is optional, because this service will start before syslog).
+ 
+-3.7 Status files
++3.6 Status files
+  /var/run/systemtap/<script-name>
+ 
++3.7 Dracut
++ Files related to dracut/initramfs creation
++
++3.7.1 Dracut stap module directory
++ /usr/lib/dracut/modules.d/99stap
++
++ These files permit SystemTap modules to be included in the initramfs.
+ 
+ 4. Configuration Format
+ =======================
+@@ -213,6 +251,14 @@ Configuration file allows us
+  option. You should check cache directory before enabling this option.
+  (default: no)
+ 
++4.1.12 LOG_BOOT_ERR
++ Because boot-time scripts are run before the root filesystem is mounted,
++ staprun's stderr cannot be logged to the LOG_FILE as usual (see 4.1.6).
++ However, the log can instead be output to /var/run/systemtap/$script.log (which
++ is accessible at boot-time) by setting LOG_BOOT_ERR to 'yes'. If STAT_PATH is
++ different from the default, the log files will be moved there upon executing
++ any of the initscript commands.
++
+ 4.2 Script Parameters
+ 
+ 4.2.1 <script-name>_OPT
+@@ -353,3 +399,49 @@ script2_REQ=script1
+  # vi /etc/systemtap/config
+  AUTOCOMPILE=no
+  ALLOW_CACHEONLY=yes
++
++5.9 Starting scripts during early-boot
++ The initscript also allows you to start scripts earlier during the boot
++ process by creating an initramfs containing the script's module. Your system
++ must be dracut-based for this to work. Starting at this stage gives access to
++ information otherwise very hard to obtain.
++
++5.9.1 Preparing the script
++ As usual, place the script in /etc/systemtap/script.d and any configuration
++ settings in /etc/systemtap/conf.d. (Note however that -o and -c are not
++ supported).
++
++5.9.2 Adding to initramfs
++ Simply run the command:
++ # service systemtap onboot my_script
++ If the script is not already compiled and cached, it will be done at this
++ point.  A new initramfs will then be created at the default location. You can
++ specify the '-b' option to make sure that your current initramfs is backed up.
++ You can then restart your system. See 2.2.6 for more information regarding the
++ onboot command.
++
++5.9.3 Adding to a different initramfs
++ Rather than taking the spot of the default initramfs, you may want to create a
++ different initramfs for a one-time boot. You can do this using the -o option:
++ # service systemtap onboot -o /boot/special_initramfs.img
++ Once the initramfs is created, you can change the command-line options at
++ boot-time so that the new image is used rather than the usual one.
++
++5.9.4 Creating an initramfs for a different kernel
++ Just like the compile command, you can use the -r option to specify the kernel
++ for which you would like to create the initramfs. This is useful when you are
++ about to upgrade and would like to prepare in advance. For example:
++ # service systemtap onboot -r 3.12.6-200.fc19.x86_64 my_script
++
++5.9.5 Removing from initramfs
++ To remove all scripts from the initramfs, you can run:
++ # service systemtap onboot
++ (That is, without any scripts explicitly mentioned). This will simply create
++ a standard initramfs without any SystemTap modules inserted.
++
++5.9.6 Troubleshooting
++ There can be many reasons for which the module didn't insert or did not work as
++ expected. It may be useful to turn on dracut debugging by adding 'rdinitdebug' to
++ the kernel command-line and checking dmesg/journalctl -ae. Also, you can
++ capture the stderr output of staprun by setting LOG_BOOT_ERR to 'yes' (see
++ 4.1.12).
+diff --git a/initscript/config.systemtap.in b/initscript/config.systemtap.in
+index 23068e1..9237b3b 100644
+--- a/initscript/config.systemtap.in
++++ b/initscript/config.systemtap.in
+@@ -18,3 +18,6 @@
+ # Start these scripts by default. If omitted, all scripts are started.
+ # DEFAULT_START=
+ 
++# Log boot-time staprun stderr to /var/run/systemtap/$script.log
++# LOG_BOOT_ERR=no
++
+diff --git a/initscript/systemtap.in b/initscript/systemtap.in
+old mode 100644
+new mode 100755
+index c1c8854..5290f56
+--- a/initscript/systemtap.in
++++ b/initscript/systemtap.in
+@@ -36,6 +36,11 @@ STAP=@bindir@/stap
+ STAPRUN=@bindir@/staprun
+ UNAME=/bin/uname
+ LSMOD=/sbin/lsmod
++DRACUT=/sbin/dracut
++
++# Not actually used directly, but needed by
++# stap dracut module for inclusion in initramfs
++STAPIO=@libexecdir@/systemtap/stapio
+ 
+ # Path setup
+ SCRIPT_PATH=@sysconfdir@/systemtap/script.d
+@@ -45,6 +50,9 @@ STAT_PATH=@localstatedir@/run/systemtap
+ TEMP_PATH=/tmp
+ LOG_FILE=@localstatedir@/log/systemtap.log
+ 
++# NB: this path is also used in 99stap/module-setup.sh
++DRACUT_SRC=@prefix@/lib/dracut/modules.d/99stap/params.conf
++
+ # FAIL unless all scripts succeeded to run
+ PASSALL=yes
+ 
+@@ -60,6 +68,9 @@ DEFAULT_START=
+ # Allow cache only scripts
+ ALLOW_CACHEONLY=no
+ 
++# Log boot-time staprun stderr to /var/run/systemtap/$script.log
++LOG_BOOT_ERR=no
++
+ # Optional settings
+ CONFIG=@sysconfdir@/systemtap/config
+ SCRIPTS=
+@@ -68,14 +79,18 @@ OPT_RECURSIVE=
+ OPT_SCRIPTS=
+ OPTS=
+ OPT_ASSUMEYES=
++INITRAMFS=
++BACKUP_INITRAMFS=
+ 
+ echo_usage () {
+-  echo $"Usage: $prog {start|stop|status|restart|compile|cleanup|condrestart|try-restart|reload|force-reload} [option]"
++  echo $"Usage: $prog {start|stop|status|restart|compile|onboot|cleanup|condrestart|try-restart|reload|force-reload} [option]"
+   echo $"Options:"
++  echo $"	-b		: backup initramfs before overwriting"
+   echo $"	-c configfile	: specify config file"
++  echo $"	-o path.img	: specify initramfs output file"
+   echo $"	-r kernelrelease: specify kernel release version"
+   echo $"	-R 		: recursively dependency checking"
+-  echo $"	-y 		: answer yes for all questions."
++  echo $"	-y 		: answer yes for all questions"
+   echo $"	script(s)	: specify systemtap scripts"
+ }
+ 
+@@ -154,6 +169,13 @@ parse_args () { # arguments
+       -y)
+         OPT_ASSUMEYES=1
+         ;;
++      -o)
++        INITRAMFS=$2
++        shift 1
++        ;;
++      -b)
++        BACKUP_INITRAMFS=1
++        ;;
+       --)
+         ;;
+       *)
+@@ -166,7 +188,7 @@ parse_args () { # arguments
+ 
+ CMD=$1
+ shift 1
+-OPTS=`getopt -s bash -u -o 'r:c:Ry' -- $@`
++OPTS=`getopt -s bash -u -o 'r:c:Ryo:b' -- $@`
+ if [ $? -ne 0 ]; then
+   slog "Error: Argument parse error: $@"
+   failure $"parse error"
+@@ -175,6 +197,11 @@ if [ $? -ne 0 ]; then
+ fi
+ parse_args $OPTS
+ 
++# Set default output file if not given as an option
++if [ ! "$INITRAMFS" ]; then
++  INITRAMFS=/boot/initramfs-$KRELEASE.img
++fi
++
+ # Include configs
+ . "$CONFIG"
+ 
+@@ -188,7 +215,7 @@ check_bool $PASSALL
+ PASSALL=$?
+ check_bool $RECURSIVE
+ RECURSIVE=$?
+-if [ "$OPT_RECURSIVE" ]; then # -r option overrides RECURSIVE.
++if [ "$OPT_RECURSIVE" ]; then # -R option overrides RECURSIVE.
+   RECURSIVE=1
+ fi
+ check_bool $AUTOCOMPILE
+@@ -198,6 +225,9 @@ CACHE_PATH="$CACHE_PATH/$KRELEASE"
+ check_bool $ALLOW_CACHEONLY
+ ALLOW_CACHEONLY=$?
+ 
++check_bool $LOG_BOOT_ERR
++LOG_BOOT_ERR=$?
++
+ __get_all_scripts () {
+   local s
+   if [ $ALLOW_CACHEONLY -eq 1 ]; then
+@@ -225,6 +255,29 @@ else
+   SCRIPTS="$OPT_SCRIPTS"
+ fi
+ 
++# Move over any pid files in /var/run/systemtap (from boot-time scripts)
++# to the user-defined $STAT_PATH if it's different.
++if [ "$STAT_PATH" != /var/run/systemtap ] && # XXX: use inodes instead?
++   [ -d /var/run/systemtap ]; then
++
++   # Check if there's stuff to copy
++  if [ "$(ls -A /var/run/systemtap)" ]; then
++
++    # Create target dir if it does not exist
++    if [ ! -d "$STAT_PATH" ]; then
++      logex mkdir -p "$STAT_PATH"
++      if [ $? -ne 0 ]; then
++        do_failure $"Failed to make stat directory ($STAT_PATH)"
++        exit 1
++      fi
++    fi
++
++    cp /var/run/systemtap/* "$STAT_PATH"
++  fi
++
++  rm -rf /var/run/systemtap
++fi
++
+ #------------------------------------------------------------------
+ # Main routine
+ #------------------------------------------------------------------
+@@ -328,10 +381,13 @@ get_compile_opts () { # opts
+   done
+ }
+ 
++# Returns 0 if something went wrong
++# Returns 1 if in -L mode
++# Returns 2 if in -D (daemon) mode
+ get_run_opts () { # normalized_opts
+   local opts o show mode
+   opts=`stap_getopt $*`
+-  [ $? -ne 0 ] && return 1
++  [ $? -ne 0 ] && return 0
+   mode='-L'
+   show=0
+   for o in $opts; do
+@@ -351,6 +407,9 @@ get_run_opts () { # normalized_opts
+     esac
+   done
+   echo -n $mode
++  [ "$mode" == "-L" ] && return 1
++  [ "$mode" == "-D" ] && return 2
++  return 0
+ }
+ 
+ prepare_cache_dir () {
+@@ -457,7 +516,7 @@ sort_dependency () { # scripts
+ }
+ 
+ start_script () { # script
+-  local tmpdir s=$1 ret count=0
++  local tmpdir s=$1 ret count=0 mode
+   check_running $s
+   ret=$?
+   [ $ret -eq 0 ] && return 0 # already running
+@@ -472,7 +531,8 @@ start_script () { # script
+ 
+   eval opts=\$${s}_OPT
+   opts=`get_run_opts $opts`
+-  [ $? -ne 0 ] && return 2
++  mode=$?
++  [ $mode -eq 0 ] && return 2
+ 
+   clog " Starting $1 ... " -n
+   tmpdir=`mktemp -d -p "$TEMP_PATH" cache.XXXXXXXX`  # bz7097
+@@ -489,12 +549,14 @@ start_script () { # script
+   # used, staprun detaches from the terminal and *then* prints the new
+   # pid.  So, it is possible to check the ./pid file before it has
+   # been written.  To avoid this, wait a bit (if necessary).
+-  while [ $count -lt 10 ]; do
+-    # when the file exists and has a size > 0, quit
+-    [ -s ./pid ] && break
+-    sleep 1
+-    count=`expr $count + 1`
+-  done
++  if [ $mode -eq 2 ]; then
++    while [ $count -lt 10 ]; do
++      # when the file exists and has a size > 0, quit
++      [ -s ./pid ] && break
++      sleep 1
++      count=`expr $count + 1`
++    done
++  fi
+ 
+   [ x`cat ./pid` = x ] && echo 0 > ./pid
+   if [ $ret -eq 0 ]; then
+@@ -674,6 +736,142 @@ compile () {
+   return 0
+ }
+ 
++# Writes info to $DRACUT_SRC, which the stap dracut module will source
++# Includes all needed info such as location of stap/staprun, which
++# scripts to insert, and their options
++update_dracut() { # scripts
++  local s opts
++
++  if [ -f "$DRACUT_SRC" ]; then
++    rm -f "$DRACUT_SRC"
++  fi
++
++  echo      "STAPRUN=\"$STAPRUN\""      >> "$DRACUT_SRC"
++  echo       "STAPIO=\"$STAPIO\""       >> "$DRACUT_SRC"
++  echo   "CACHE_PATH=\"$CACHE_PATH\""   >> "$DRACUT_SRC"
++  echo    "STAT_PATH=\"$STAT_PATH\""    >> "$DRACUT_SRC"
++  echo     "KRELEASE=\"$KRELEASE\""     >> "$DRACUT_SRC"
++  echo "LOG_BOOT_ERR=\"$LOG_BOOT_ERR\"" >> "$DRACUT_SRC"
++
++  echo -n "ONBOOT_SCRIPTS=\"" >> "$DRACUT_SRC"
++  for s in $*; do
++    echo -n "$s " >> "$DRACUT_SRC"
++  done
++  echo "\"" >> "$DRACUT_SRC"
++
++  for s in $*; do
++    eval opts=\$${s}_OPT
++    opts=`get_run_opts $opts`
++    [ $? -eq 0 ] && return 1
++    echo -n "$s" >> "$DRACUT_SRC"
++    echo "_OPT=\"$opts\"" >> "$DRACUT_SRC"
++  done
++}
++
++backup_initramfs() {
++  # does target file exist?
++  if [ -f "$INITRAMFS" ]; then
++    # don't overwrite an existing backup
++    if [ ! -f "$INITRAMFS.bak" ]; then
++      mv "$INITRAMFS" "$INITRAMFS.bak"
++      clog "Renamed $INITRAMFS"
++      clog "     to $INITRAMFS.bak"
++      RESTORE_INITRAMFS_ON_FAIL=1
++    else
++      clog "Backup already exists: $INITRAMFS.bak"
++    fi
++  fi
++}
++
++onboot () {
++  local s ret ss
++  if [ ! -f "$DRACUT" ]; then
++    clog "Could not find $DRACUT" -n
++    do_failure "$DRACUT not found"
++    clog
++    clog "The system must be dracut-based to use this feature"
++    clog "If it is located elsewhere, modify the \$DRACUT parameter" -n
++    return 1
++  fi
++  if [ ! -d "$(dirname $DRACUT_SRC)" ]; then
++    clog "Could not find dracut module" -n
++    do_failure "SystemTap dracut module $(dirname $DRACUT_SRC) not found"
++    return 1
++  fi
++  prepare_cache_dir
++  if [ $? -ne 0 ]; then
++    do_failure "Failed to make cache directory ($CACHE_PATH)"
++    return 1
++  fi
++  # NB: we use OPT_SCRIPTS, not SCRIPTS because we want
++  # no scripts passed to mean building a virgin initramfs
++  for s in $OPT_SCRIPTS; do
++    compile_script $s check
++    ret=$?
++    [ $ret -ne 0 ] && might_fail "Could not compile $s ($ret)"
++    eval opts=\$${s}_OPT
++    opts=`get_run_opts $opts`
++    mode=$?
++    clog " Checking options $s ... " -n
++    [ $mode -eq 0 ] && might_fail "Bad runtime options for script $s"
++    [ $mode -eq 2 ] && might_fail "Unsupported option -o in script $s"
++    if [ $ret -eq 0 ] && [ $mode -eq 1 ]; then
++      ss="$ss$s "
++      clog "done"
++    fi
++  done
++  # User specified script(s) but they were all skipped
++  if [ -n "$OPT_SCRIPTS" ] && [ -z "$ss" ]; then
++    do_failure "No scripts left to operate on"
++    return 1
++  fi
++  if [ ! "$ss" ]; then
++    clog " Creating initramfs without scripts ... " -n
++  else
++    clog " Creating initramfs with $ss... " -n
++  fi
++  update_dracut $ss
++  if [ $? -ne 0 ]; then
++    do_failure "Call to update_dracut failed. Bad opts?"
++    return 1
++  fi
++  if [ "$BACKUP_INITRAMFS" ]; then
++    backup_initramfs
++  fi
++  dir=`dirname $INITRAMFS` && TMPINITRAMFS=`mktemp --tmpdir=$dir`
++  if [ $? -ne 0 ]; then
++    do_failure "Failed to make temporary file in $dir"
++    return 1
++  fi
++  out=$($DRACUT --force $TMPINITRAMFS $KRELEASE 2>&1)
++  # dracut will report success even if some modules (e.g. stap) failed
++  # to install some files, so we need to be a bit more involved in
++  # checking for errors
++  if [ $? -ne 0 ] || [[ "$out" == *ERROR* ]]; then
++    do_failure "The initramfs creation is unsuccessful"
++    if [ -f /var/log/dracut.log ]; then
++      do_failure "See /var/log/dracut.log for more info"
++    else
++      do_failure "See dracut log for more info"
++    fi
++    echo # We need a new line
++    if [ -f "$TMPINITRAMFS" ]; then
++      rm "$TMPINITRAMFS"
++    fi
++    # Put back the initramfs if we moved it (if we didn't move it, then
++    # whatever initramfs they used to boot in is still there)
++    if [ "$RESTORE_INITRAMFS_ON_FAIL" ]; then
++      mv "$INITRAMFS.bak" "$INITRAMFS"
++      clog "Renamed $INITRAMFS.bak"
++      clog "     to $INITRAMFS"
++    fi
++    return 1
++  fi
++  mv "$TMPINITRAMFS" "$INITRAMFS"
++  might_success "initramfs created"
++  return 0
++}
++
+ # Cleanup caches
+ cleanup () {
+   local s ss ret
+@@ -731,6 +929,10 @@ case $CMD in
+   compile
+   RETVAL=$?
+   ;;
++  onboot)
++  onboot
++  RETVAL=$?
++  ;;
+   cleanup)
+   cleanup
+   RETVAL=$?
+@@ -748,3 +950,5 @@ esac
+ 
+ echo
+ exit $RETVAL
++
++# vim: sw=2 ts=8
+diff --git a/systemtap.spec b/systemtap.spec
+index 39d22ca..6cd5853 100644
+--- a/systemtap.spec
++++ b/systemtap.spec
+@@ -32,6 +32,7 @@
+ # don't want to build runtime-virthost for f18 or RHEL5/6
+ %{!?with_virthost: %global with_virthost 0%{?fedora} >= 19 || 0%{?rhel} >= 7}
+ %{!?with_virtguest: %global with_virtguest 1}
++%{!?with_dracut: %global with_dracut 0%{?fedora} >= 19 || 0%{?rhel} >= 7}
+ 
+ %if 0%{?fedora} >= 18 || 0%{?rhel} >= 6
+    %define initdir %{_initddir}
+@@ -47,6 +48,9 @@
+    %endif
+ %endif
+ 
++%define dracutlibdir %{_prefix}/lib/dracut
++%define dracutstap %{dracutlibdir}/modules.d/99stap
++
+ Name: systemtap
+ Version: 2.4
+ Release: 1%{?dist}
+@@ -60,7 +64,7 @@ Release: 1%{?dist}
+ # systemtap-devel        /usr/bin/stap, runtime, tapset, req:kernel-devel
+ # systemtap-runtime      /usr/bin/staprun, /usr/bin/stapsh, /usr/bin/stapdyn
+ # systemtap-client       /usr/bin/stap, samples, docs, tapset(bonus), req:-runtime
+-# systemtap-initscript   /etc/init.d/systemtap, req:systemtap
++# systemtap-initscript   /etc/init.d/systemtap, dracut module, req:systemtap
+ # systemtap-sdt-devel    /usr/include/sys/sdt.h /usr/bin/dtrace
+ # systemtap-testsuite    /usr/share/systemtap/testsuite*, req:systemtap, req:sdt-devel
+ # systemtap-runtime-java libHelperSDT.so, HelperSDT.jar, stapbm, req:-runtime
+@@ -245,7 +249,9 @@ Requires(preun): initscripts
+ Requires(postun): initscripts
+ 
+ %description initscript
+-Sysvinit scripts to launch selected systemtap scripts at system startup.
++This package includes a SysVinit script to launch selected systemtap
++scripts at system startup, along with a dracut module for early
++boot-time probing if supported.
+ 
+ 
+ %package sdt-devel
+@@ -545,6 +551,13 @@ done
+    %endif
+ %endif
+ 
++%if %{with_dracut}
++   mkdir -p $RPM_BUILD_ROOT%{dracutstap}
++   install -p -m 755 initscript/99stap/module-setup.sh $RPM_BUILD_ROOT%{dracutstap}
++   install -p -m 755 initscript/99stap/start-staprun.sh $RPM_BUILD_ROOT%{dracutstap}
++   touch $RPM_BUILD_ROOT%{dracutstap}/params.conf
++%endif
++
+ %clean
+ rm -rf ${RPM_BUILD_ROOT}
+ 
+@@ -615,7 +628,7 @@ if [ $1 = 0 ] ; then
+        /bin/systemctl stop stap-server.service >/dev/null 2>&1 || :
+     %else
+         /sbin/service stap-server stop >/dev/null 2>&1
+-    	/sbin/chkconfig --del stap-server
++        /sbin/chkconfig --del stap-server
+     %endif
+ fi
+ exit 0
+@@ -625,7 +638,7 @@ exit 0
+ # If so, restart the service if it's running
+ if [ "$1" -ge "1" ] ; then
+     %if %{with_systemd}
+-    	/bin/systemctl restart stap-server.service >/dev/null 2>&1 || :
++        /bin/systemctl restart stap-server.service >/dev/null 2>&1 || :
+     %else
+         /sbin/service stap-server condrestart >/dev/null 2>&1 || :
+     %endif
+@@ -634,8 +647,7 @@ exit 0
+ 
+ %post initscript
+ %if %{with_systemd}
+-    /bin/systemctl enable stap-server.service >/dev/null 2>&1 || :
+-     /bin/systemd-tmpfiles --create >/dev/null 2>&1 || :
++    /bin/systemctl enable systemtap.service >/dev/null 2>&1 || :
+ %else
+     /sbin/chkconfig --add systemtap
+ %endif
+@@ -646,11 +658,11 @@ exit 0
+ # just removing the old package on upgrade.
+ if [ $1 = 0 ] ; then
+     %if %{with_systemd}
+-    	/bin/systemctl --no-reload disable stap-server.service >/dev/null 2>&1 || :
+-	/bin/systemctl stop stap-server.service >/dev/null 2>&1 || :
++        /bin/systemctl --no-reload disable systemtap.service >/dev/null 2>&1 || :
++        /bin/systemctl stop systemtap.service >/dev/null 2>&1 || :
+     %else
+         /sbin/service systemtap stop >/dev/null 2>&1
+-    	/sbin/chkconfig --del systemtap
++        /sbin/chkconfig --del systemtap
+     %endif
+ fi
+ exit 0
+@@ -660,7 +672,7 @@ exit 0
+ # If so, restart the service if it's running
+ if [ "$1" -ge "1" ] ; then
+     %if %{with_systemd}
+-        /bin/systemctl restart stap-server.service >/dev/null 2>&1 || :
++        /bin/systemctl condrestart systemtap.service >/dev/null 2>&1 || :
+     %else
+         /sbin/service systemtap condrestart >/dev/null 2>&1 || :
+     %endif
+@@ -917,6 +929,10 @@ done
+ %dir %{_localstatedir}/cache/systemtap
+ %ghost %{_localstatedir}/run/systemtap
+ %doc initscript/README.systemtap
++%if %{with_dracut}
++   %dir %{dracutstap}
++   %{dracutstap}/*
++%endif
+ 
+ 
+ %files sdt-devel
+@@ -970,6 +986,9 @@ done
+ #   http://sourceware.org/systemtap/wiki/SystemTapReleases
+ 
+ %changelog
++* Mon Jan 06 2014 Jonathan Lebon <jlebon@redhat.com>
++- Added dracut module to initscript package
++
+ * Wed Nov 06 2013 Frank Ch. Eigler <fche@redhat.com> - 2.4-1
+ - Upstream release.
+ 
+diff --git a/tapset-utrace.cxx b/tapset-utrace.cxx
+index 05491f3..d0f90ea 100644
+--- a/tapset-utrace.cxx
++++ b/tapset-utrace.cxx
+@@ -700,15 +700,6 @@ struct utrace_builder: public derived_probe_builder
+         sess.unwindsym_modules.insert (path);
+         path_tgt = path_remove_sysroot(sess, path);
+       }
+-    else if (has_pid)
+-      {
+-	// We can't probe 'init' (pid 1).  XXX: where does this limitation come from?
+-	if (pid < 2)
+-	  throw SEMANTIC_ERROR (_("process pid must be greater than 1"),
+-				location->components.front()->tok);
+-
+-        // XXX: could we use /proc/$pid/exe in unwindsym_modules and elsewhere?
+-      }
+ 
+     finished_results.push_back(new utrace_derived_probe(sess, base, location,
+ 							has_path, path_tgt, pid,
+-- 
+1.8.3.1
+

@@ -1,0 +1,33 @@
+From 9ee1bfe9ac1c92a0640e64a463efd43c9c5a57ac Mon Sep 17 00:00:00 2001
+From: Torsten Polle <Torsten.Polle@gmx.de>
+Date: Fri, 7 Mar 2014 14:39:31 -0600
+Subject: [PATCH 7/8] Fix: stap/staprun deadlocks when probing ends.
+
+stap_stop_task_finder() exits utrace through utrace_exit(). At that
+time, there might be outstanding task workers. Hence, waiting for
+exiting the task work waits forever. Therefore exiting the task work
+is done after canceling all task workers.
+---
+ runtime/linux/task_finder2.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/runtime/linux/task_finder2.c b/runtime/linux/task_finder2.c
+index e8f33a3..a3abc16 100644
+--- a/runtime/linux/task_finder2.c
++++ b/runtime/linux/task_finder2.c
+@@ -1875,10 +1875,10 @@ stap_stop_task_finder(void)
+ 	debug_task_finder_report();
+ #endif
+ 
+-	utrace_exit();
+-
+ 	/* Make sure all outstanding task work requests are canceled. */
+ 	__stp_tf_cancel_task_work();
++
++	utrace_exit();
+ }
+ 
+ #endif /* TASK_FINDER2_C */
+-- 
+1.8.3.1
+

@@ -1,0 +1,32 @@
+From 1436fd6092bf724e8bc80c53c7bc3c71ff9835cc Mon Sep 17 00:00:00 2001
+From: Dave Brolley <brolley@redhat.com>
+Date: Wed, 12 Feb 2014 16:03:51 -0500
+Subject: [PATCH] RHBZ 847285: Don't allow 'systemctl reload'.
+
+'reload' is not supported by the stap-server script. The
+ExecReload line in stap-server.service was calling
+'stap-server restart' which stops the server and starts a
+new one. This behavior is not expected or tolerated by systemd
+which promptly sends SIGKILL to the new server.
+
+We cannot supported 'reload' in systemctl. Note that 'restart'
+is supported and works properly.
+---
+ stap-server.service | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/stap-server.service b/stap-server.service
+index 000ee74..76e2196 100644
+--- a/stap-server.service
++++ b/stap-server.service
+@@ -8,7 +8,6 @@ After=network.target avahi-daemon.service
+ Type=oneshot
+ User=stap-server
+ ExecStart=/usr/bin/stap-server start
+-ExecReload=/usr/bin/stap-server restart
+ ExecStop=/usr/bin/stap-server stop
+ RemainAfterExit=yes 
+  
+-- 
+1.8.3.1
+

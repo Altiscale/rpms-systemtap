@@ -1,0 +1,63 @@
+commit b728b27964bbded79d0f8c07c0bdbf6acd8fe2db
+Author: Jonathan Lebon <jlebon@redhat.com>
+Date:   Wed Jan 8 16:38:57 2014 -0500
+
+    autoreconf
+
+diff --git a/Makefile.in b/Makefile.in
+index 2c543f1..e6d03fa 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -120,8 +120,10 @@ DIST_COMMON = $(srcdir)/Makefile.in $(srcdir)/Makefile.am \
+ 	$(top_srcdir)/initscript/config.systemtap.in \
+ 	$(top_srcdir)/initscript/config.stap-server.in \
+ 	$(top_srcdir)/initscript/systemtap.in \
+-	$(top_srcdir)/initscript/stap-server.in $(srcdir)/run-stap.in \
+-	$(srcdir)/dtrace.in $(top_srcdir)/staprun/guest/stapshd.in \
++	$(top_srcdir)/initscript/stap-server.in \
++	$(top_srcdir)/initscript/99stap/module-setup.sh.in \
++	$(srcdir)/run-stap.in $(srcdir)/dtrace.in \
++	$(top_srcdir)/staprun/guest/stapshd.in \
+ 	$(top_srcdir)/staprun/guest/stapsh-daemon.in \
+ 	$(top_srcdir)/staprun/guest/stapsh@.service.in depcomp \
+ 	$(am__noinst_HEADERS_DIST) $(oldinclude_HEADERS)
+@@ -139,7 +141,8 @@ mkinstalldirs = $(install_sh) -d
+ CONFIG_HEADER = config.h
+ CONFIG_CLEAN_FILES = includes/sys/sdt-config.h \
+ 	initscript/config.systemtap initscript/config.stap-server \
+-	initscript/systemtap initscript/stap-server run-stap dtrace \
++	initscript/systemtap initscript/stap-server \
++	initscript/99stap/module-setup.sh run-stap dtrace \
+ 	staprun/guest/stapshd staprun/guest/stapsh-daemon \
+ 	staprun/guest/stapsh@.service
+ CONFIG_CLEAN_VPATH_FILES =
+@@ -724,6 +727,8 @@ initscript/systemtap: $(top_builddir)/config.status $(top_srcdir)/initscript/sys
+ 	cd $(top_builddir) && $(SHELL) ./config.status $@
+ initscript/stap-server: $(top_builddir)/config.status $(top_srcdir)/initscript/stap-server.in
+ 	cd $(top_builddir) && $(SHELL) ./config.status $@
++initscript/99stap/module-setup.sh: $(top_builddir)/config.status $(top_srcdir)/initscript/99stap/module-setup.sh.in
++	cd $(top_builddir) && $(SHELL) ./config.status $@
+ run-stap: $(top_builddir)/config.status $(srcdir)/run-stap.in
+ 	cd $(top_builddir) && $(SHELL) ./config.status $@
+ dtrace: $(top_builddir)/config.status $(srcdir)/dtrace.in
+diff --git a/configure b/configure
+index af7c03a..69231af 100755
+--- a/configure
++++ b/configure
+@@ -11420,7 +11420,7 @@ STAP_PREFIX="$stap_prefix"
+ 
+ ac_config_headers="$ac_config_headers config.h:config.in"
+ 
+-ac_config_files="$ac_config_files Makefile doc/Makefile man/Makefile doc/beginners/Makefile doc/SystemTap_Tapset_Reference/Makefile man/stappaths.7 initscript/config.systemtap initscript/config.stap-server initscript/systemtap initscript/stap-server"
++ac_config_files="$ac_config_files Makefile doc/Makefile man/Makefile doc/beginners/Makefile doc/SystemTap_Tapset_Reference/Makefile man/stappaths.7 initscript/config.systemtap initscript/config.stap-server initscript/systemtap initscript/stap-server initscript/99stap/module-setup.sh"
+ 
+ 
+ 
+@@ -12296,6 +12296,7 @@ do
+     "initscript/config.stap-server") CONFIG_FILES="$CONFIG_FILES initscript/config.stap-server" ;;
+     "initscript/systemtap") CONFIG_FILES="$CONFIG_FILES initscript/systemtap" ;;
+     "initscript/stap-server") CONFIG_FILES="$CONFIG_FILES initscript/stap-server" ;;
++    "initscript/99stap/module-setup.sh") CONFIG_FILES="$CONFIG_FILES initscript/99stap/module-setup.sh" ;;
+     "run-stap") CONFIG_FILES="$CONFIG_FILES run-stap" ;;
+     "dtrace") CONFIG_FILES="$CONFIG_FILES dtrace" ;;
+     "stapdyn/Makefile") CONFIG_FILES="$CONFIG_FILES stapdyn/Makefile" ;;

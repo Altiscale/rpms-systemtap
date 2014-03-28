@@ -1,0 +1,52 @@
+From a41f2ad77a642e70f46caa8261746c651f5dc2ad Mon Sep 17 00:00:00 2001
+From: Josh Stone <jistone@redhat.com>
+Date: Mon, 2 Dec 2013 14:34:07 -0800
+Subject: [PATCH] Use proper set operations for symtab dupe checks
+
+In query_symtab_func_info, rather than full set iteration to check an
+address in alias_dupes, just use set::insert().second as a test.  This
+is what sets are designed to be algorithmically good at.
+
+This also has the benefit of adding to alias_dupes, so duplicates within
+the symbol table itself will still only be probed once.  (If we didn't
+want that effect, we would just use set::count() to test membership.)
+---
+ tapsets.cxx | 22 ++++------------------
+ 1 file changed, 4 insertions(+), 18 deletions(-)
+
+diff --git a/tapsets.cxx b/tapsets.cxx
+index f1a5843..b3cfa0e 100644
+--- a/tapsets.cxx
++++ b/tapsets.cxx
+@@ -1003,24 +1003,10 @@ query_symtab_func_info (func_info & fi, dwarf_query * q)
+ 
+   // If there are already probes in this module, lets not duplicate.
+   // This can come from other weak symbols/aliases or existing
+-  // matches from Dwarf DIE functions.
+-  if (q->alias_dupes.size() > 0)
+-    {
+-      for (set<Dwarf_Addr>::iterator it=q->alias_dupes.begin(); it!=q->alias_dupes.end(); ++it)
+-	{
+-	  // If we've already got a probe at that pc, skip it
+-	  if (*it == addr)
+-	    return;
+-	  if (*it != addr && ++it==q->alias_dupes.end())
+-	    {
+-	      // Build a probe at this point
+-	      query_func_info(addr, fi, q);
+-	      return;
+-	    }
+-	}
+-    }
+-  else
+-    query_func_info(addr,fi,q);
++  // matches from Dwarf DIE functions.  Try to add this addr to the
++  // collection, and only continue if it was new.
++  if (q->alias_dupes.insert(addr).second)
++    query_func_info(addr, fi, q);
+ }
+ 
+ void
+-- 
+1.8.3.1
+

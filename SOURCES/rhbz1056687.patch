@@ -1,0 +1,35 @@
+commit fb3db0ca1cf6bed4bb4beabbf9bf91d09759cae6
+Author: Martin Cermak <mcermak@redhat.com>
+Date:   Wed Jan 22 17:01:36 2014 +0100
+
+    PR16448: adapt stap-prep for el7
+    
+    * stap-prep: use yum to install needed kernel information RPMs
+      should work across all yum-based rhel releases
+
+diff --git a/stap-prep b/stap-prep
+index 541316a..dc997ab 100755
+--- a/stap-prep
++++ b/stap-prep
+@@ -30,18 +30,10 @@ NEEDED=`rpm --qf "%{name}-%{version}-%{release}.%{arch}\n" \
+     -q $CANDIDATES | grep "is not installed" | awk '{print $2}'`
+ if [ "$NEEDED" != "" ]; then
+     echo -e "Need to install the following packages:\n$NEEDED"
+-    if [ `id -u` = "0" ]; then #attempt download and install
+-        DIR=`mktemp -d` || exit 1
+-        if [ ! -x /usr/bin/yumdownloader ]; then
+-            echo "Need to first install yum-utils for yumdownloader"
+-            yum install -y yum-utils
+-        fi
+-        yumdownloader --enablerepo="*debuginfo*" $NEEDED --destdir=$DIR \
+-                      --resolve
+-        check_error $? "problem downloading rpm(s) $NEEDED"
+-        rpm --force -ivh $DIR/*.rpm
++    if [ `id -u` = "0" ]; then #attempt to install
++        yum install -y --enablerepo=\* $NEEDED
++        rpm -q $NEEDED
+         check_error $? "problem installing rpm(s) $NEEDED"
+-        rm -r $DIR #cleanup
+     fi
+ fi
+ }

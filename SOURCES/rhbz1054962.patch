@@ -1,0 +1,93 @@
+From a94b495c5b48324cecff42afce15a4d843577741 Mon Sep 17 00:00:00 2001
+From: Jonathan Lebon <jlebon@redhat.com>
+Date: Wed, 13 Nov 2013 12:29:49 -0500
+Subject: BZ1054962
+
+BZ1054962: PR16166: assign token to new block
+
+BZ1054962: stap translator: tolerate NULLs coming from some elfutils string lookups
+
+It was reported on the mailing list, and privately experienced, that
+stap pass-2 crashes could occur due to NULL dwarf_diename or
+dwarf_decl_file's being propagated rather far within stap.  This
+commit adds protections (of the form ?: "foo") to eliminate the
+problem in a few spots.  There may be others; we should not store
+so many raw char*'s.
+---
+ dwflpp.cxx  |  4 ++--
+ tapsets.cxx | 16 +++++++++++-----
+ 2 files changed, 13 insertions(+), 7 deletions(-)
+
+diff --git a/dwflpp.cxx b/dwflpp.cxx
+index f8b1517..93713d0 100644
+--- a/dwflpp.cxx
++++ b/dwflpp.cxx
+@@ -1742,7 +1742,7 @@ dwflpp::iterate_over_labels (Dwarf_Die *begin_die,
+                 {
+                   // Get the file/line number for this label
+                   int dline;
+-                  const char *file = dwarf_decl_file (&die);
++                  const char *file = dwarf_decl_file (&die) ?: "<unknown source>";
+                   dwarf_decl_line (&die, &dline);
+ 
+                   vector<Dwarf_Die> scopes = getscopes_die(&die);
+@@ -2045,7 +2045,7 @@ dwflpp::function_file (char const ** c)
+ {
+   assert (function);
+   assert (c);
+-  *c = dwarf_decl_file (function);
++  *c = dwarf_decl_file (function) ?: "<unknown source>";
+ }
+ 
+ 
+diff --git a/tapsets.cxx b/tapsets.cxx
+index 6dea4d2..205de34 100644
+--- a/tapsets.cxx
++++ b/tapsets.cxx
+@@ -1683,8 +1683,14 @@ inline_instance_info::operator<(const inline_instance_info& other) const
+     return decl_line < other.decl_line;
+ 
+   int cmp = name.compare(other.name);
+-  if (!cmp)
+-    cmp = strcmp(decl_file, other.decl_file);
++
++  if (!cmp) 
++    {
++      assert (decl_file);
++      assert (other.decl_file);
++      cmp = strcmp(decl_file, other.decl_file);
++    }
++
+   return cmp < 0;
+ }
+ 
+@@ -3874,6 +3880,7 @@ dwarf_var_expanding_visitor::visit_perf_op (perf_op *e)
+   t->content = e_lit_val;
+ 
+   add_block = new block;
++  add_block->tok = e->tok;
+ 
+   systemtap_session &s = this->q.sess;
+   map<string, pair<string,derived_probe*> >::iterator it;
+@@ -4187,8 +4194,7 @@ dwarf_atvar_query::atvar_query_cu (Dwarf_Die * cudie, void * data)
+ 
+   if (! q->e.cu_name.empty())
+     {
+-      const char *die_name = dwarf_diename(cudie);
+-
++      const char *die_name = dwarf_diename(cudie) ?: "";
+       if (strcmp(die_name, q->e.cu_name.c_str()) != 0 // Perfect match
+           && fnmatch(q->cu_name_pattern.c_str(), die_name, 0) != 0)
+         {
+@@ -9714,7 +9720,7 @@ tracepoint_derived_probe::build_args(dwflpp&, Dwarf_Die& func_die)
+         {
+           // build a tracepoint_arg for this parameter
+           tracepoint_arg tparg;
+-          tparg.name = dwarf_diename(&arg);
++          tparg.name = dwarf_diename(&arg) ?: "";
+ 
+           // read the type of this parameter
+           if (!dwarf_attr_die (&arg, DW_AT_type, &tparg.type_die)
+-- 
+1.8.3.1
+

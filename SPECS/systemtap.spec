@@ -32,6 +32,7 @@
 # don't want to build runtime-virthost for f18 or RHEL5/6
 %{!?with_virthost: %global with_virthost 0%{?fedora} >= 19 || 0%{?rhel} >= 7}
 %{!?with_virtguest: %global with_virtguest 1}
+%{!?with_dracut: %global with_dracut 0%{?fedora} >= 19 || 0%{?rhel} >= 7}
 
 %if 0%{?fedora} >= 18 || 0%{?rhel} >= 6
    %define initdir %{_initddir}
@@ -47,11 +48,44 @@
    %endif
 %endif
 
+%define dracutlibdir %{_prefix}/lib/dracut
+%define dracutstap %{dracutlibdir}/modules.d/99stap
+
 Name: systemtap
 Version: 2.4
-Release: 1%{?dist}
+Release: 14%{?dist}
 # for version, see also configure.ac
 
+#Patch1: reserved for elfutils (see below)
+Patch2: rhbz1054962.patch
+Patch3: rhbz1054956.patch
+Patch4: rhbz1054954.patch
+Patch5: rhbz1051649.patch
+Patch6: rhbz1044429.patch
+Patch7: rhbz1055778.patch
+Patch8: rhbz1035752.patch
+Patch9: rhbz1035850.patch
+Patch10: rhbz1056687.patch
+Patch11: rhbz1057773.patch
+Patch12: rhbz1020207.patch
+Patch13: rhbz1062076.patch
+Patch14: rhbz1051649.2.patch
+Patch15: rhbz847285.patch
+Patch16: rhbz1073640.1.patch
+Patch17: rhbz1073640.2.patch
+Patch18: rhbz1073640.3.patch
+Patch19: rhbz1073640.4.patch
+Patch20: rhbz1073640.5.patch
+Patch21: rhbz1073640.6.patch
+Patch22: rhbz1073640.7.patch
+Patch23: rhbz1073640.8.patch
+Patch24: rhbz1051649.3.patch
+Patch25: rhbz1051649.4.patch
+Patch26: rhbz1051649.5.patch
+Patch27: rhbz1051649.6.patch
+Patch28: rhbz1051649.7.patch
+Patch29: rhbz1051649.8.patch
+Patch30: rhbz1051649.9.patch
 
 # Packaging abstract:
 #
@@ -60,7 +94,7 @@ Release: 1%{?dist}
 # systemtap-devel        /usr/bin/stap, runtime, tapset, req:kernel-devel
 # systemtap-runtime      /usr/bin/staprun, /usr/bin/stapsh, /usr/bin/stapdyn
 # systemtap-client       /usr/bin/stap, samples, docs, tapset(bonus), req:-runtime
-# systemtap-initscript   /etc/init.d/systemtap, req:systemtap
+# systemtap-initscript   /etc/init.d/systemtap, dracut module, req:systemtap
 # systemtap-sdt-devel    /usr/include/sys/sdt.h /usr/bin/dtrace
 # systemtap-testsuite    /usr/share/systemtap/testsuite*, req:systemtap, req:sdt-devel
 # systemtap-runtime-java libHelperSDT.so, HelperSDT.jar, stapbm, req:-runtime
@@ -245,7 +279,9 @@ Requires(preun): initscripts
 Requires(postun): initscripts
 
 %description initscript
-Sysvinit scripts to launch selected systemtap scripts at system startup.
+This package includes a SysVinit script to launch selected systemtap
+scripts at system startup, along with a dracut module for early
+boot-time probing if supported.
 
 
 %package sdt-devel
@@ -367,6 +403,36 @@ sleep 1
 find . \( -name configure -o -name config.h.in \) -print | xargs touch
 cd ..
 %endif
+
+%patch2 -p1
+%patch3 -p1
+%patch4 -p1
+%patch5 -p1
+%patch6 -p1
+%patch7 -p1
+%patch8 -p1
+%patch9 -p1
+%patch10 -p1
+%patch11 -p1
+%patch12 -p1
+%patch13 -p1
+%patch14 -p1
+%patch15 -p1
+%patch16 -p1
+%patch17 -p1
+%patch18 -p1
+%patch19 -p1
+%patch20 -p1
+%patch21 -p1
+%patch22 -p1
+%patch23 -p1
+%patch24 -p1
+%patch25 -p1
+%patch26 -p1
+%patch27 -p1
+%patch28 -p1
+%patch29 -p1
+%patch30 -p1
 
 %build
 
@@ -545,6 +611,13 @@ done
    %endif
 %endif
 
+%if %{with_dracut}
+   mkdir -p $RPM_BUILD_ROOT%{dracutstap}
+   install -p -m 755 initscript/99stap/module-setup.sh $RPM_BUILD_ROOT%{dracutstap}
+   install -p -m 755 initscript/99stap/start-staprun.sh $RPM_BUILD_ROOT%{dracutstap}
+   touch $RPM_BUILD_ROOT%{dracutstap}/params.conf
+%endif
+
 %clean
 rm -rf ${RPM_BUILD_ROOT}
 
@@ -588,10 +661,11 @@ test -e %{_localstatedir}/log/stap-server/log || {
 if test ! -e ~stap-server/.systemtap/ssl/server/stap.cert; then
    runuser -s /bin/sh - stap-server -c %{_libexecdir}/systemtap/stap-gen-cert >/dev/null
 fi
-# Activate the service
+# Prepare the service
 %if %{with_systemd}
-     /bin/systemctl enable stap-server.service >/dev/null 2>&1 || :
-     /bin/systemd-tmpfiles --create >/dev/null 2>&1 || :
+     # Note, Fedora policy doesn't allow network services enabled by default
+     # /bin/systemctl enable stap-server.service >/dev/null 2>&1 || :
+     /bin/systemd-tmpfiles --create %{_tmpfilesdir}/stap-server.conf >/dev/null 2>&1 || :
 %else
     /sbin/chkconfig --add stap-server
 %endif
@@ -615,7 +689,7 @@ if [ $1 = 0 ] ; then
        /bin/systemctl stop stap-server.service >/dev/null 2>&1 || :
     %else
         /sbin/service stap-server stop >/dev/null 2>&1
-    	/sbin/chkconfig --del stap-server
+        /sbin/chkconfig --del stap-server
     %endif
 fi
 exit 0
@@ -625,7 +699,7 @@ exit 0
 # If so, restart the service if it's running
 if [ "$1" -ge "1" ] ; then
     %if %{with_systemd}
-    	/bin/systemctl restart stap-server.service >/dev/null 2>&1 || :
+        /bin/systemctl condrestart stap-server.service >/dev/null 2>&1 || :
     %else
         /sbin/service stap-server condrestart >/dev/null 2>&1 || :
     %endif
@@ -634,8 +708,7 @@ exit 0
 
 %post initscript
 %if %{with_systemd}
-    /bin/systemctl enable stap-server.service >/dev/null 2>&1 || :
-     /bin/systemd-tmpfiles --create >/dev/null 2>&1 || :
+    /bin/systemctl enable systemtap.service >/dev/null 2>&1 || :
 %else
     /sbin/chkconfig --add systemtap
 %endif
@@ -646,11 +719,11 @@ exit 0
 # just removing the old package on upgrade.
 if [ $1 = 0 ] ; then
     %if %{with_systemd}
-    	/bin/systemctl --no-reload disable stap-server.service >/dev/null 2>&1 || :
-	/bin/systemctl stop stap-server.service >/dev/null 2>&1 || :
+        /bin/systemctl --no-reload disable systemtap.service >/dev/null 2>&1 || :
+        /bin/systemctl stop systemtap.service >/dev/null 2>&1 || :
     %else
         /sbin/service systemtap stop >/dev/null 2>&1
-    	/sbin/chkconfig --del systemtap
+        /sbin/chkconfig --del systemtap
     %endif
 fi
 exit 0
@@ -660,7 +733,7 @@ exit 0
 # If so, restart the service if it's running
 if [ "$1" -ge "1" ] ; then
     %if %{with_systemd}
-        /bin/systemctl restart stap-server.service >/dev/null 2>&1 || :
+        /bin/systemctl condrestart systemtap.service >/dev/null 2>&1 || :
     %else
         /sbin/service systemtap condrestart >/dev/null 2>&1 || :
     %endif
@@ -916,7 +989,11 @@ done
 %config(noreplace) %{_sysconfdir}/systemtap/config
 %dir %{_localstatedir}/cache/systemtap
 %ghost %{_localstatedir}/run/systemtap
-%doc initscript/README.systemtap
+%{_mandir}/man8/systemtap.8*
+%if %{with_dracut}
+   %dir %{dracutstap}
+   %{dracutstap}/*
+%endif
 
 
 %files sdt-devel
@@ -970,6 +1047,47 @@ done
 #   http://sourceware.org/systemtap/wiki/SystemTapReleases
 
 %changelog
+* Fri Mar 28 2014 Jonathan Lebon <jlebon@redhat.com> - 2.4-14
+- Small fix on latest backport fix for dyninst runtime
+
+* Fri Mar 28 2014 Jonathan Lebon <jlebon@redhat.com> - 2.4-13
+- Backport fixes for 1051649 (see comments 4 and 5)
+
+* Thu Mar 06 2014 Jonathan Lebon <jlebon@redhat.com> - 2.4-12
+- Backport fix for 1073640
+
+* Wed Feb 12 2014 Jonathan Lebon <jlebon@redhat.com> - 2.4-11
+- Backport fix for 847285
+
+* Wed Feb 12 2014 Jonathan Lebon <jlebon@redhat.com> - 2.4-10
+- Apply spec file patches to this one, not the tarred one
+- Add missing autoreconf patch for backport feature (1051649)
+
+* Tue Feb 11 2014 Jonathan Lebon <jlebon@redhat.com> - 2.4-9
+- Backport fixes for: 1062076, 1020207
+
+* Tue Jan 28 2014 Daniel Mach <dmach@redhat.com> - 2.4-8
+- Mass rebuild 2014-01-24
+
+* Fri Jan 24 2014 Jonathan Lebon <jlebon@redhat.com> - 2.4-7
+- Backport fix for 1057773
+
+* Wed Jan 22 2014 Frank Ch. Subbackportmeister Eigler <fche@redhat.com> - 2.4-6
+- Backport fixes for: 1056687
+
+* Wed Jan 22 2014 Jonathan Lebon <jlebon@redhat.com> - 2.4-5
+- Backport fixes for: 1035752, 1035850
+
+* Tue Jan 21 2014 Jonathan Lebon <jlebon@redhat.com> - 2.4-4
+- Backport fix for 1055778
+
+* Fri Jan 17 2014 Jonathan Lebon <jlebon@redhat.com> - 2.4-3
+- Backport fixes for: 1054962, 1054956, 1054954, 1044429
+- Backport boot-time probing feature (1051649)
+
+* Fri Dec 27 2013 Daniel Mach <dmach@redhat.com> - 2.4-2
+- Mass rebuild 2013-12-27
+
 * Wed Nov 06 2013 Frank Ch. Eigler <fche@redhat.com> - 2.4-1
 - Upstream release.
 

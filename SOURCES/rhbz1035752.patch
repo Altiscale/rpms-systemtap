@@ -1,0 +1,108 @@
+From 735972b4c681efeff3c4137816cb913174a839be Mon Sep 17 00:00:00 2001
+From: Jonathan Lebon <jlebon@redhat.com>
+Date: Mon, 2 Dec 2013 11:17:05 -0500
+Subject: [PATCH 1/2] Resolves: #1035752
+
+Upstream commit e7d52b3.
+---
+ csclient.cxx     |  2 +-
+ stap-serverd.cxx | 34 ++++++++++++++++++----------------
+ 2 files changed, 19 insertions(+), 17 deletions(-)
+
+diff --git a/csclient.cxx b/csclient.cxx
+index cce5428..4cfeb08 100644
+--- a/csclient.cxx
++++ b/csclient.cxx
+@@ -829,7 +829,7 @@ compile_server_client::passes_0_4 ()
+            << TIMESPRINT
+            << endl;
+     }
+-  if (rc)
++  if (rc && !s.listing_mode)
+     {
+       clog << _("Passes: via server failed.  Try again with another '-v' option.") << endl;
+     }
+diff --git a/stap-serverd.cxx b/stap-serverd.cxx
+index 53a8d3a..035d06c 100644
+--- a/stap-serverd.cxx
++++ b/stap-serverd.cxx
+@@ -63,7 +63,7 @@ extern "C" {
+ using namespace std;
+ 
+ static void cleanup ();
+-static PRStatus spawn_and_wait (const vector<string> &argv,
++static PRStatus spawn_and_wait (const vector<string> &argv, int *result,
+                                 const char* fd0, const char* fd1, const char* fd2,
+ 				const char *pwd, const vector<string>& envVec = vector<string> ());
+ 
+@@ -1234,18 +1234,19 @@ handleRequest (const string &requestDirName, const string &responseDirName, stri
+   get_stap_locale (staplang, envVec, stapstderr, &client_version);
+ 
+   /* All ready, let's run the translator! */
+-  rc = spawn_and_wait(stapargv, "/dev/null", stapstdout.c_str (), stapstderr.c_str (),
+-		      requestDirName.c_str (), envVec);
++  int staprc;
++  rc = spawn_and_wait(stapargv, &staprc, "/dev/null", stapstdout.c_str (),
++                      stapstderr.c_str (), requestDirName.c_str (), envVec);
++  if (rc != PR_SUCCESS)
++    {
++      server_error(_("Failed spawning translator"));
++      return;
++    }
+ 
+   /* Save the RC */
+-  string staprc = responseDirName + "/rc";
+-  f = fopen(staprc.c_str (), "w");
+-  if (f) 
+-    {
+-      /* best effort basis */
+-      fprintf(f, "%d", rc);
+-      fclose(f);
+-    }
++  ofstream ofs((responseDirName + "/rc").c_str());
++  ofs << staprc;
++  ofs.close();
+ 
+   // In unprivileged modes, if we have a module built, we need to sign the sucker.
+   privilege_t privilege = getRequestedPrivilege (stapargv);
+@@ -1316,7 +1317,7 @@ handleRequest (const string &requestDirName, const string &responseDirName, stri
+ /* A front end for stap_spawn that handles stdin, stdout, stderr, switches to a working
+    directory and returns overall success or failure. */
+ static PRStatus
+-spawn_and_wait (const vector<string> &argv,
++spawn_and_wait (const vector<string> &argv, int *spawnrc,
+ 		const char* fd0, const char* fd1, const char* fd2,
+ 		const char *pwd, const vector<string>& envVec)
+ { 
+@@ -1380,8 +1381,8 @@ spawn_and_wait (const vector<string> &argv,
+       return PR_FAILURE;
+     }
+ 
+-  rc = stap_waitpid (0, pid);
+-  if (rc == -1)
++  *spawnrc = stap_waitpid (0, pid);
++  if (*spawnrc == -1)
+     {
+       server_error (_("Error in waitpid"));
+       return PR_FAILURE;
+@@ -1540,14 +1541,15 @@ handle_connection (void *arg)
+   handleRequest(requestDirName, responseDirName, stapstderr);
+ 
+   /* Zip the response. */
++  int ziprc;
+   argv.clear ();
+   argv.push_back ("zip");
+   argv.push_back ("-q");
+   argv.push_back ("-r");
+   argv.push_back (responseFileName);
+   argv.push_back (".");
+-  rc = spawn_and_wait (argv, NULL, NULL, NULL, responseDirName);
+-  if (rc != PR_SUCCESS)
++  rc = spawn_and_wait (argv, &ziprc, NULL, NULL, NULL, responseDirName);
++  if (rc != PR_SUCCESS || ziprc != 0)
+     {
+       server_error (_("Unable to compress server response"));
+       goto cleanup;
+-- 
+1.8.3.1
+

@@ -1,0 +1,115 @@
+From b2c99fdcc379ae65a83e25a6b6a8bc2b77a5b03c Mon Sep 17 00:00:00 2001
+From: Jonathan Lebon <jlebon@redhat.com>
+Date: Tue, 21 Jan 2014 16:21:31 -0500
+Subject: [PATCH] testsuite: adjust tests for new probing powers
+
+Since we can now probe more functions (such as _start,
+register_tm_clones), a few tests need to be adjusted.
+
+* rep_ret.exp
+
+  Get rid of 'bad' var and handle the case where main is not the first
+  line printed out (which is now _start).
+
+* process_by_cmd.exp
+
+  Change wildcard probe (which now picks up too many functions) for
+  multiple probe points targetting only the functions we want.
+
+* exelib.exp
+
+  Same as process_by_cmd.exp
+---
+ testsuite/systemtap.base/process_by_cmd.stp      | 5 ++++-
+ testsuite/systemtap.base/rep_ret.exp             | 9 ++++++---
+ testsuite/systemtap.exelib/libmarkunamestack.stp | 6 ++++--
+ testsuite/systemtap.exelib/uname.stp             | 6 ++++--
+ 4 files changed, 18 insertions(+), 8 deletions(-)
+
+diff --git a/testsuite/systemtap.base/process_by_cmd.stp b/testsuite/systemtap.base/process_by_cmd.stp
+index 8f744e0..5fe1dec 100644
+--- a/testsuite/systemtap.base/process_by_cmd.stp
++++ b/testsuite/systemtap.base/process_by_cmd.stp
+@@ -1,3 +1,6 @@
+ probe process.function("main") { printf("func end\n") }
+-probe process.function("*").return { printf("func return end\n") }
++probe process.function("main").return,
++      process.function("first").return,
++      process.function("second").return,
++      process.function("third") { printf("func return end\n") }
+ probe process.mark("*") { printf("mark end\n") }
+diff --git a/testsuite/systemtap.base/rep_ret.exp b/testsuite/systemtap.base/rep_ret.exp
+index 959050e..75b64df 100644
+--- a/testsuite/systemtap.base/rep_ret.exp
++++ b/testsuite/systemtap.base/rep_ret.exp
+@@ -32,11 +32,14 @@ foreach arch $arches {
+ 
+   if {[installtest_p] && [uprobes_p]} {
+     set ok 0
+-    set bad 0
+     set warn 0
+ 
+     spawn stap -e {probe process(@1).function("*") { println(probefunc()) }} ./$exe -c ./$exe
++    # We have two cases for main below to handle the possibility of main not being the first
++    # line being printed out (but only one of the two will ever fire, so the count is still 3)
++    # The test however does still ensure that main is followed by rep_ret then by repnz_ret.
+     expect {
++      -re {\r\nmain\r\n} { incr ok; exp_continue }
+       -re {^main\r\n} { incr ok; exp_continue }
+       -re {^rep_ret\r\n} { incr ok; exp_continue }
+       -re {^repnz_ret\r\n} { incr ok; exp_continue }
+@@ -46,10 +49,10 @@ foreach arch $arches {
+     }
+     wait
+ 
+-    if {$ok == 3 && $bad == 0 && $warn == 0} {
++    if {$ok == 3 && $warn == 0} {
+       pass "$exe"
+     } else {
+-      fail "$exe ($ok, $bad, $warn)"
++      fail "$exe ($ok, $warn)"
+     }
+   } else {
+     untested "$exe"
+diff --git a/testsuite/systemtap.exelib/libmarkunamestack.stp b/testsuite/systemtap.exelib/libmarkunamestack.stp
+index 3ad1aa5..7894ef4 100644
+--- a/testsuite/systemtap.exelib/libmarkunamestack.stp
++++ b/testsuite/systemtap.exelib/libmarkunamestack.stp
+@@ -28,11 +28,13 @@ probe process(@2).mark("func_count") {
+ }
+ 
+ #uname
+-probe process(@1).function("*") {
++probe process(@1).function("main"),
++      process(@1).function("main_func") {
+   printf("exe: %s=%s\n",probefunc(), usymname(uaddr()));
+ }
+ 
+-probe process(@2).function("*") {
++probe process(@2).function("lib_main"),
++      process(@2).function("lib_func") {
+   printf("lib: %s=%s\n",probefunc(), usymname(uaddr()));
+ }
+ 
+diff --git a/testsuite/systemtap.exelib/uname.stp b/testsuite/systemtap.exelib/uname.stp
+index aaf7ef1..25e6f8d 100644
+--- a/testsuite/systemtap.exelib/uname.stp
++++ b/testsuite/systemtap.exelib/uname.stp
+@@ -1,10 +1,12 @@
+ // Prints probefunc() and usymname(uaddr()) to check they are similar.
+ // Arguments: @1 uprobes_exe, @2 libuprobes_lib.so
+ 
+-probe process(@1).function("*") {
++probe process(@1).function("main"),
++      process(@1).function("main_func") {
+   printf("exe: %s=%s\n",probefunc(), usymname(uaddr()));
+ }
+ 
+-probe process(@2).function("*") {
++probe process(@2).function("lib_main"),
++      process(@2).function("lib_func") {
+   printf("lib: %s=%s\n",probefunc(), usymname(uaddr()));
+ }
+-- 
+1.8.3.1
+
