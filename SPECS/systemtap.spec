@@ -53,7 +53,7 @@
 
 Name: systemtap
 Version: 2.4
-Release: 14%{?dist}
+Release: 16%{?dist}
 # for version, see also configure.ac
 
 #Patch1: reserved for elfutils (see below)
@@ -86,6 +86,9 @@ Patch27: rhbz1051649.6.patch
 Patch28: rhbz1051649.7.patch
 Patch29: rhbz1051649.8.patch
 Patch30: rhbz1051649.9.patch
+Patch31: rhbz1118070.patch
+Patch32: rhbz1126645.patch
+
 
 # Packaging abstract:
 #
@@ -433,6 +436,8 @@ cd ..
 %patch28 -p1
 %patch29 -p1
 %patch30 -p1
+%patch31 -p1
+%patch32 -p1
 
 %build
 
@@ -1047,6 +1052,14 @@ done
 #   http://sourceware.org/systemtap/wiki/SystemTapReleases
 
 %changelog
+* Mon Sep 29 2014 Frank Ch. Eigler <fche@redhat.com> - 2.4-16
+- tweak bug #1126645 patch to permit stap 2.4 to use new aliases
+  (normally restricted to >= 2.5)
+
+* Tue Sep 16 2014 Frank Ch. Eigler <fche@redhat.com> - 2.4-15
+- bug #1118070 (unintended probed process interrupt)
+- bug #1126645 (kprocess.exec probe alias)
+
 * Fri Mar 28 2014 Jonathan Lebon <jlebon@redhat.com> - 2.4-14
 - Small fix on latest backport fix for dyninst runtime
 
