@@ -1,7 +1,7 @@
 %{!?with_sqlite: %global with_sqlite 1}
 %{!?with_docs: %global with_docs 1}
 # crash is not available
-%ifarch ppc ppc64 %{sparc} aarch64 s390 s390x
+%ifarch %{sparc}
 %{!?with_crash: %global with_crash 0}
 %else
 %{!?with_crash: %global with_crash 1}
@@ -11,7 +11,7 @@
 %{!?elfutils_version: %global elfutils_version 0.142}
 %{!?pie_supported: %global pie_supported 1}
 %{!?with_boost: %global with_boost 0}
-%ifarch ppc ppc64 %{sparc} aarch64
+%ifarch ppc %{sparc}
 %{!?with_publican: %global with_publican 0}
 %else
 %{!?with_publican: %global with_publican 1}
@@ -21,18 +21,25 @@
 %else
 %{!?publican_brand: %global publican_brand fedora}
 %endif
-%ifnarch s390 s390x %{arm} aarch64
+%ifarch %{ix86} x86_64 ppc ppc64
 %{!?with_dyninst: %global with_dyninst 0%{?fedora} >= 18 || 0%{?rhel} >= 7}
 %else
 %{!?with_dyninst: %global with_dyninst 0}
 %endif
 %{!?with_systemd: %global with_systemd 0%{?fedora} >= 19 || 0%{?rhel} >= 7}
-%{!?with_emacsvim: %global with_emacsvim 1}
-%{!?with_java: %global with_java 1}
-# don't want to build runtime-virthost for f18 or RHEL5/6
+%{!?with_emacsvim: %global with_emacsvim 0%{?fedora} >= 19 || 0%{?rhel} >= 7}
+%{!?with_java: %global with_java 0%{?fedora} >= 19 || 0%{?rhel} >= 7}
 %{!?with_virthost: %global with_virthost 0%{?fedora} >= 19 || 0%{?rhel} >= 7}
 %{!?with_virtguest: %global with_virtguest 1}
 %{!?with_dracut: %global with_dracut 0%{?fedora} >= 19 || 0%{?rhel} >= 7}
+%ifarch x86_64
+%{!?with_mokutil: %global with_mokutil 0%{?fedora} >= 18 || 0%{?rhel} >= 7}
+%{!?with_openssl: %global with_openssl 0%{?fedora} >= 18 || 0%{?rhel} >= 7}
+%else
+%{!?with_mokutil: %global with_mokutil 0}
+%{!?with_openssl: %global with_openssl 0}
+%endif
+%{!?with_pyparsing: %global with_pyparsing 0%{?fedora} >= 18 || 0%{?rhel} >= 7}
 
 %if 0%{?fedora} >= 18 || 0%{?rhel} >= 6
    %define initdir %{_initddir}
@@ -41,10 +48,14 @@
 %endif
 
 %if %{with_virtguest}
-   %if 0%{?fedora} >= 18 || 0%{?rhel} >= 6
-      %define udevrulesdir /lib/udev/rules.d
+   %if 0%{?fedora} >= 18 || 0%{?rhel} >= 7
+      %define udevrulesdir /usr/lib/udev/rules.d
    %else
-      %define udevrulesdir /etc/udev/rules.d
+      %if 0%{?rhel} >= 6
+         %define udevrulesdir /lib/udev/rules.d
+      %else # RHEL5
+         %define udevrulesdir /etc/udev/rules.d
+      %endif
    %endif
 %endif
 
@@ -52,42 +63,19 @@
 %define dracutstap %{dracutlibdir}/modules.d/99stap
 
 Name: systemtap
-Version: 2.4
-Release: 16%{?dist}
+Version: 2.6
+Release: 8%{?dist}
 # for version, see also configure.ac
 
 #Patch1: reserved for elfutils (see below)
-Patch2: rhbz1054962.patch
-Patch3: rhbz1054956.patch
-Patch4: rhbz1054954.patch
-Patch5: rhbz1051649.patch
-Patch6: rhbz1044429.patch
-Patch7: rhbz1055778.patch
-Patch8: rhbz1035752.patch
-Patch9: rhbz1035850.patch
-Patch10: rhbz1056687.patch
-Patch11: rhbz1057773.patch
-Patch12: rhbz1020207.patch
-Patch13: rhbz1062076.patch
-Patch14: rhbz1051649.2.patch
-Patch15: rhbz847285.patch
-Patch16: rhbz1073640.1.patch
-Patch17: rhbz1073640.2.patch
-Patch18: rhbz1073640.3.patch
-Patch19: rhbz1073640.4.patch
-Patch20: rhbz1073640.5.patch
-Patch21: rhbz1073640.6.patch
-Patch22: rhbz1073640.7.patch
-Patch23: rhbz1073640.8.patch
-Patch24: rhbz1051649.3.patch
-Patch25: rhbz1051649.4.patch
-Patch26: rhbz1051649.5.patch
-Patch27: rhbz1051649.6.patch
-Patch28: rhbz1051649.7.patch
-Patch29: rhbz1051649.8.patch
-Patch30: rhbz1051649.9.patch
-Patch31: rhbz1118070.patch
-Patch32: rhbz1126645.patch
+Patch2: rhbz1139844.patch
+Patch3: rhbz1141919.patch
+Patch4: rhbz1153673.patch
+Patch5: rhbz1164373.patch
+Patch6: rhbz1119335.patch
+Patch7: rhbz1127591.patch
+Patch8: rhbz1167652.patch
+Patch9: rhbz1171823.patch
 
 
 # Packaging abstract:
@@ -209,6 +197,9 @@ Requires(preun): chkconfig
 Requires(preun): initscripts
 Requires(postun): initscripts
 BuildRequires: nss-devel avahi-devel
+%if %{with_openssl}
+Requires: openssl
+%endif
 
 %description server
 This is the remote script compilation server component of systemtap.
@@ -221,7 +212,6 @@ Summary: Programmable system-wide instrumentation system - development headers, 
 Group: Development/System
 License: GPLv2+
 URL: http://sourceware.org/systemtap/
-Requires: kernel >= 2.6.9-11
 # Alternate kernel packages kernel-PAE-devel et al. have a virtual
 # provide for kernel-devel, so this requirement does the right thing,
 # at least past RHEL4.
@@ -243,7 +233,6 @@ Summary: Programmable system-wide instrumentation system - runtime
 Group: Development/System
 License: GPLv2+
 URL: http://sourceware.org/systemtap/
-Requires: kernel >= 2.6.9-11
 Requires(pre): shadow-utils
 
 %description runtime
@@ -261,6 +250,9 @@ Requires: zip unzip
 Requires: systemtap-runtime = %{version}-%{release}
 Requires: coreutils grep sed unzip zip
 Requires: openssh-clients
+%if %{with_mokutil}
+Requires: mokutil
+%endif
 
 %description client
 This package contains/requires the components needed to develop
@@ -292,6 +284,9 @@ Summary: Static probe support tools
 Group: Development/System
 License: GPLv2+ and Public Domain
 URL: http://sourceware.org/systemtap/
+%if %{with_pyparsing}
+Requires: pyparsing
+%endif
 
 %description sdt-devel
 This package includes the <sys/sdt.h> header file used for static
@@ -316,7 +311,7 @@ Requires: strace
 # that provides nc has changed over time (from 'nc' to
 # 'nmap-ncat'). So, we'll do a file-based require.
 Requires: /usr/bin/nc
-%ifnarch ia64
+%ifnarch ia64 ppc64le aarch64
 Requires: prelink
 %endif
 # testsuite/systemtap.server/client.exp needs avahi
@@ -333,6 +328,9 @@ Requires: /usr/lib/libc.so
 # ... and /usr/lib/libgcc_s.so.*
 # ... and /usr/lib/libstdc++.so.*
 %endif
+%if 0%{?fedora} >= 18
+Requires: stress
+%endif
 
 %description testsuite
 This package includes the dejagnu-based systemtap stress self-testing
@@ -348,6 +346,7 @@ License: GPLv2+
 URL: http://sourceware.org/systemtap/
 Requires: systemtap-runtime = %{version}-%{release}
 Requires: byteman > 2.0
+Requires: net-tools
 
 %description runtime-java
 This package includes support files needed to run systemtap scripts
@@ -415,29 +414,6 @@ cd ..
 %patch7 -p1
 %patch8 -p1
 %patch9 -p1
-%patch10 -p1
-%patch11 -p1
-%patch12 -p1
-%patch13 -p1
-%patch14 -p1
-%patch15 -p1
-%patch16 -p1
-%patch17 -p1
-%patch18 -p1
-%patch19 -p1
-%patch20 -p1
-%patch21 -p1
-%patch22 -p1
-%patch23 -p1
-%patch24 -p1
-%patch25 -p1
-%patch26 -p1
-%patch27 -p1
-%patch28 -p1
-%patch29 -p1
-%patch30 -p1
-%patch31 -p1
-%patch32 -p1
 
 %build
 
@@ -652,7 +628,11 @@ test -e ~stap-server && chmod 750 ~stap-server
 if [ ! -f ~stap-server/.systemtap/rc ]; then
   mkdir -p ~stap-server/.systemtap
   chown stap-server:stap-server ~stap-server/.systemtap
-  echo "--rlimit-as=614400000 --rlimit-cpu=60 --rlimit-nproc=20 --rlimit-stack=1024000 --rlimit-fsize=51200000" > ~stap-server/.systemtap/rc
+  # PR16276: guess at a reasonable number for a default --rlimit-nproc
+  numcpu=`/usr/bin/getconf _NPROCESSORS_ONLN`
+  if [ -z "$numcpu" -o "$numcpu" -lt 1 ]; then numcpu=1; fi
+  nproc=`expr $numcpu \* 30`
+  echo "--rlimit-as=614400000 --rlimit-cpu=60 --rlimit-nproc=$nproc --rlimit-stack=1024000 --rlimit-fsize=51200000" > ~stap-server/.systemtap/rc
   chown stap-server:stap-server ~stap-server/.systemtap/rc
 fi
 
@@ -809,8 +789,8 @@ exit 0
 
 %triggerin runtime-java -- java-1.7.0-openjdk, java-1.6.0-openjdk
 for f in %{_libexecdir}/systemtap/libHelperSDT_*.so; do
-    %ifarch %{ix86} ppc64
-        %ifarch ppc64
+    %ifarch %{ix86} %{power64}
+        %ifarch %{power64}
             arch=ppc64
 	%else
 	    arch=i386
@@ -819,15 +799,17 @@ for f in %{_libexecdir}/systemtap/libHelperSDT_*.so; do
         arch=`basename $f | cut -f2 -d_ | cut -f1 -d.`
     %endif
     for archdir in %{_jvmdir}/*openjdk*/jre/lib/${arch}; do
-        ln -sf %{_libexecdir}/systemtap/libHelperSDT_${arch}.so ${archdir}/libHelperSDT_${arch}.so
-        ln -sf %{_libexecdir}/systemtap/HelperSDT.jar ${archdir}/../ext/HelperSDT.jar
+	 if [ -d ${archdir} ]; then
+            ln -sf %{_libexecdir}/systemtap/libHelperSDT_${arch}.so ${archdir}/libHelperSDT_${arch}.so
+            ln -sf %{_libexecdir}/systemtap/HelperSDT.jar ${archdir}/../ext/HelperSDT.jar
+	 fi
     done
 done
 
 %triggerun runtime-java -- java-1.7.0-openjdk, java-1.6.0-openjdk
 for f in %{_libexecdir}/systemtap/libHelperSDT_*.so; do
-    %ifarch %{ix86} ppc64
-        %ifarch ppc64
+    %ifarch %{ix86} %{power64}
+        %ifarch %{power64}
             arch=ppc64
 	%else
 	    arch=i386
@@ -844,8 +826,8 @@ done
 %triggerpostun runtime-java -- java-1.7.0-openjdk, java-1.6.0-openjdk
 # Restore links for any JDKs remaining after a package removal:
 for f in %{_libexecdir}/systemtap/libHelperSDT_*.so; do
-    %ifarch %{ix86} ppc64
-        %ifarch ppc64
+    %ifarch %{ix86} %{power64}
+        %ifarch %{power64}
             arch=ppc64
 	%else
 	    arch=i386
@@ -854,8 +836,10 @@ for f in %{_libexecdir}/systemtap/libHelperSDT_*.so; do
         arch=`basename $f | cut -f2 -d_ | cut -f1 -d.`
     %endif
     for archdir in %{_jvmdir}/*openjdk*/jre/lib/${arch}; do
-        ln -sf %{_libexecdir}/systemtap/libHelperSDT_${arch}.so ${archdir}/libHelperSDT_${arch}.so
-        ln -sf %{_libexecdir}/systemtap/HelperSDT.jar ${archdir}/../ext/HelperSDT.jar
+	 if [ -d ${archdir} ]; then
+            ln -sf %{_libexecdir}/systemtap/libHelperSDT_${arch}.so ${archdir}/libHelperSDT_${arch}.so
+            ln -sf %{_libexecdir}/systemtap/HelperSDT.jar ${archdir}/../ext/HelperSDT.jar
+	 fi
     done
 done
 
@@ -898,8 +882,9 @@ done
 %dir %attr(0755,stap-server,stap-server) %{_localstatedir}/log/stap-server
 %ghost %config(noreplace) %attr(0644,stap-server,stap-server) %{_localstatedir}/log/stap-server/log
 %ghost %attr(0755,stap-server,stap-server) %{_localstatedir}/run/stap-server
-%doc initscript/README.stap-server
-%doc README README.unprivileged AUTHORS NEWS COPYING
+%doc README README.unprivileged AUTHORS NEWS 
+%{!?_licensedir:%global license %%doc}
+%license COPYING
 
 
 %files devel -f systemtap.lang
@@ -915,7 +900,9 @@ done
 %{_mandir}/man7/error*
 %{_mandir}/man7/stappaths.7*
 %{_mandir}/man7/warning*
-%doc README README.unprivileged AUTHORS NEWS COPYING
+%doc README README.unprivileged AUTHORS NEWS 
+%{!?_licensedir:%global license %%doc}
+%license COPYING
 %if %{with_java}
 %dir %{_libexecdir}/systemtap
 %{_libexecdir}/systemtap/libHelperSDT_*.so
@@ -956,12 +943,16 @@ done
 %if %{with_dyninst}
 %{_mandir}/man8/stapdyn.8*
 %endif
-%doc README README.security AUTHORS NEWS COPYING
+%doc README README.security AUTHORS NEWS 
+%{!?_licensedir:%global license %%doc}
+%license COPYING
 
 
 %files client -f systemtap.lang
 %defattr(-,root,root)
-%doc README README.unprivileged AUTHORS NEWS COPYING examples
+%doc README README.unprivileged AUTHORS NEWS examples
+%{!?_licensedir:%global license %%doc}
+%license COPYING
 %if %{with_docs}
 %doc docs.installed/*.pdf
 %doc docs.installed/tapsets/*.html
@@ -1007,7 +998,9 @@ done
 %{_includedir}/sys/sdt.h
 %{_includedir}/sys/sdt-config.h
 %{_mandir}/man1/dtrace.1*
-%doc README AUTHORS NEWS COPYING
+%doc README AUTHORS NEWS 
+%{!?_licensedir:%global license %%doc}
+%license COPYING
 
 
 %files testsuite
@@ -1052,13 +1045,35 @@ done
 #   http://sourceware.org/systemtap/wiki/SystemTapReleases
 
 %changelog
-* Mon Sep 29 2014 Frank Ch. Eigler <fche@redhat.com> - 2.4-16
-- tweak bug #1126645 patch to permit stap 2.4 to use new aliases
-  (normally restricted to >= 2.5)
+* Wed Dec 10 2014 Frank Ch. Eigler <fche@redhat.com> - 2.6-8
+- rhbz1171823 (nfsd svc_fh access)
 
-* Tue Sep 16 2014 Frank Ch. Eigler <fche@redhat.com> - 2.4-15
-- bug #1118070 (unintended probed process interrupt)
-- bug #1126645 (kprocess.exec probe alias)
+* Wed Nov 26 2014 Frank Ch. Eigler <fche@redhat.com> - 2.6-7
+- rhbz1167652 (stap dracut empty)
+
+* Thu Nov 20 2014 Frank Ch. Eigler <fche@redhat.com> - 2.6-6
+- rhbz1164373 (fix ppc64 kprobes via KERNEL_RELOC_SYMBOL)
+- rhbz1119335 (document STAP_FIPS_OVERRIDE in staprun.8)
+- rhbz1127591 (ppc64 hcall_* tracepoint blacklisting)
+
+* Fri Oct 17 2014 Frank Ch. Eigler <fche@redhat.com> - 2.6-5
+- RHBZ1153673 (stap segv during optimization)
+
+* Fri Sep 19 2014 Frank Ch. Eigler <fche@redhat.com> - 2.6-3
+- Added probinson's patch BZ1141919 for enabling more ppc64/aarch64 facilities,
+  with some staplog.c followup
+
+* Tue Sep 09 2014 Josh Stone <jistone@redhat.com> - 2.6-2
+- Backport fix for 1139844
+
+* Fri Sep 05 2014 Josh Stone <jistone@redhat.com> - 2.6-1
+- Upstream release, rebased for 1107735
+
+* Wed Aug 27 2014 Josh Stone <jistone@redhat.com> - 2.4-16
+- Exclude ppc64le from with_crash (1125693)
+
+* Tue Aug 26 2014 Josh Stone <jistone@redhat.com> - 2.4-15
+- Tighten arch lists for prelink and dyninst (1094349, 1125693)
 
 * Fri Mar 28 2014 Jonathan Lebon <jlebon@redhat.com> - 2.4-14
 - Small fix on latest backport fix for dyninst runtime
