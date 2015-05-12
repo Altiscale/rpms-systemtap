@@ -64,7 +64,7 @@
 
 Name: systemtap
 Version: 2.6
-Release: 8%{?dist}
+Release: 10%{?dist}
 # for version, see also configure.ac
 
 #Patch1: reserved for elfutils (see below)
@@ -76,6 +76,7 @@ Patch6: rhbz1119335.patch
 Patch7: rhbz1127591.patch
 Patch8: rhbz1167652.patch
 Patch9: rhbz1171823.patch
+Patch10: rhbz1212658.patch
 
 
 # Packaging abstract:
@@ -414,6 +415,7 @@ cd ..
 %patch7 -p1
 %patch8 -p1
 %patch9 -p1
+%patch10 -p1
 
 %build
 
@@ -1045,6 +1047,12 @@ done
 #   http://sourceware.org/systemtap/wiki/SystemTapReleases
 
 %changelog
+* Thu Apr 30 2015 Frank Ch. Eigler <fche@redhat.com> - 2.6-10
+- append upstream PR18361 to xfs & signing patch, to catch up with kernel change
+
+* Tue Apr 28 2015 Frank Ch. Eigler <fche@redhat.com> - 2.6-9
+- rhbz1216230=rhbz1212658 (xfs & signing)
+
 * Wed Dec 10 2014 Frank Ch. Eigler <fche@redhat.com> - 2.6-8
 - rhbz1171823 (nfsd svc_fh access)
 
