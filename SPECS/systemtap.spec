@@ -1,7 +1,11 @@
 %{!?with_sqlite: %global with_sqlite 1}
+%ifarch ppc64le
+%{!?with_docs: %global with_docs 0}
+%else
 %{!?with_docs: %global with_docs 1}
+%endif
 # crash is not available
-%ifarch %{sparc}
+%ifarch ppc ppc64 %{sparc} aarch64 ppc64le
 %{!?with_crash: %global with_crash 0}
 %else
 %{!?with_crash: %global with_crash 1}
@@ -11,16 +15,6 @@
 %{!?elfutils_version: %global elfutils_version 0.142}
 %{!?pie_supported: %global pie_supported 1}
 %{!?with_boost: %global with_boost 0}
-%ifarch ppc %{sparc}
-%{!?with_publican: %global with_publican 0}
-%else
-%{!?with_publican: %global with_publican 1}
-%endif
-%if 0%{?rhel}
-%{!?publican_brand: %global publican_brand RedHat}
-%else
-%{!?publican_brand: %global publican_brand fedora}
-%endif
 %ifarch %{ix86} x86_64 ppc ppc64
 %{!?with_dyninst: %global with_dyninst 0%{?fedora} >= 18 || 0%{?rhel} >= 7}
 %else
@@ -41,6 +35,10 @@
 %endif
 %{!?with_pyparsing: %global with_pyparsing 0%{?fedora} >= 18 || 0%{?rhel} >= 7}
 
+%ifarch ppc64le aarch64
+%global with_virthost 0
+%endif
+
 %if 0%{?fedora} >= 18 || 0%{?rhel} >= 6
    %define initdir %{_initddir}
 %else # RHEL5 doesn't know _initddir
@@ -59,24 +57,12 @@
    %endif
 %endif
 
-%define dracutlibdir %{_prefix}/lib/dracut
-%define dracutstap %{dracutlibdir}/modules.d/99stap
+%define dracutstap %{_prefix}/lib/dracut/modules.d/99stap
 
 Name: systemtap
-Version: 2.6
+Version: 2.8
 Release: 10%{?dist}
 # for version, see also configure.ac
-
-#Patch1: reserved for elfutils (see below)
-Patch2: rhbz1139844.patch
-Patch3: rhbz1141919.patch
-Patch4: rhbz1153673.patch
-Patch5: rhbz1164373.patch
-Patch6: rhbz1119335.patch
-Patch7: rhbz1127591.patch
-Patch8: rhbz1167652.patch
-Patch9: rhbz1171823.patch
-Patch10: rhbz1212658.patch
 
 
 # Packaging abstract:
@@ -149,14 +135,6 @@ BuildRequires: tex(fullpage.sty) tex(fancybox.sty) tex(bchr7t.tfm)
 # called 'xmlto-tex'.  To avoid a specific F10 BuildReq, we'll do a
 # file-based buildreq on '/usr/share/xmlto/format/fo/pdf'.
 BuildRequires: xmlto /usr/share/xmlto/format/fo/pdf
-%if %{with_publican}
-BuildRequires: publican
-BuildRequires: /usr/share/publican/Common_Content/%{publican_brand}/defaults.cfg
-
-# A workaround for BZ920216 which requires an X server to build docs
-# with publican.
-BuildRequires: /usr/bin/xvfb-run
-%endif
 %endif
 %if %{with_emacsvim}
 BuildRequires: emacs
@@ -168,6 +146,14 @@ BuildRequires: jpackage-utils java-devel
 BuildRequires: libvirt-devel >= 1.0.2
 BuildRequires: libxml2-devel
 %endif
+
+Patch1: rhbz1237098.patch
+Patch2: june-robust.patch
+Patch3: rhbz1242992.patch
+Patch4: rhbz1248159.patch
+Patch5: rhbz1252436.patch
+Patch6: rhbz1254856.patch
+Patch7: rhbz1257399.patch
 
 # Install requirements
 Requires: systemtap-client = %{version}-%{release}
@@ -396,6 +382,13 @@ systemtap-runtime-virthost machine to execute systemtap scripts.
 
 %prep
 %setup -q %{?setup_elfutils}
+%patch1 -p1
+%patch2 -p1
+%patch3 -p1
+%patch4 -p1
+%patch5 -p1
+%patch6 -p1
+%patch7 -p1
 
 %if %{with_bundled_elfutils}
 cd elfutils-%{elfutils_version}
@@ -406,16 +399,6 @@ sleep 1
 find . \( -name configure -o -name config.h.in \) -print | xargs touch
 cd ..
 %endif
-
-%patch2 -p1
-%patch3 -p1
-%patch4 -p1
-%patch5 -p1
-%patch6 -p1
-%patch7 -p1
-%patch8 -p1
-%patch9 -p1
-%patch10 -p1
 
 %build
 
@@ -475,11 +458,6 @@ cd ..
 %global pie_config --disable-pie
 %endif
 
-%if %{with_publican}
-%global publican_config --enable-publican --with-publican-brand=%{publican_brand}
-%else
-%global publican_config --disable-publican
-%endif
 
 %if %{with_java}
 %global java_config --with-java=%{_jvmdir}/java
@@ -487,7 +465,19 @@ cd ..
 %global java_config --without-java
 %endif
 
-%configure %{?elfutils_config} %{dyninst_config} %{sqlite_config} %{crash_config} %{docs_config} %{pie_config} %{publican_config} %{rpm_config} %{java_config} --disable-silent-rules --with-extra-version="rpm %{version}-%{release}"
+%if %{with_virthost}
+%global virt_config --enable-virt
+%else
+%global virt_config --disable-virt
+%endif
+
+%if %{with_dracut}
+%global dracut_config --with-dracutstap=%{dracutstap}
+%else
+%global dracut_config
+%endif
+
+%configure %{?elfutils_config} %{dyninst_config} %{sqlite_config} %{crash_config} %{docs_config} %{pie_config} %{rpm_config} %{java_config} %{virt_config} %{dracut_config} --disable-silent-rules --with-extra-version="rpm %{version}-%{release}"
 make %{?_smp_mflags}
 
 %if %{with_emacsvim}
@@ -531,9 +521,7 @@ cp -rp testsuite $RPM_BUILD_ROOT%{_datadir}/systemtap
 mkdir docs.installed
 mv $RPM_BUILD_ROOT%{_datadir}/doc/systemtap/*.pdf docs.installed/
 mv $RPM_BUILD_ROOT%{_datadir}/doc/systemtap/tapsets docs.installed/
-%if %{with_publican}
 mv $RPM_BUILD_ROOT%{_datadir}/doc/systemtap/SystemTap_Beginners_Guide docs.installed/
-%endif
 %endif
 
 mkdir -p $RPM_BUILD_ROOT%{_sysconfdir}/stap-server
@@ -789,14 +777,10 @@ exit 0
 
 %if %{with_java}
 
-%triggerin runtime-java -- java-1.7.0-openjdk, java-1.6.0-openjdk
+%triggerin runtime-java -- java-1.8.0-openjdk, java-1.7.0-openjdk, java-1.6.0-openjdk
 for f in %{_libexecdir}/systemtap/libHelperSDT_*.so; do
-    %ifarch %{ix86} %{power64}
-        %ifarch %{power64}
-            arch=ppc64
-	%else
-	    arch=i386
-	%endif
+    %ifarch %{ix86}
+        arch=i386
     %else
         arch=`basename $f | cut -f2 -d_ | cut -f1 -d.`
     %endif
@@ -808,14 +792,10 @@ for f in %{_libexecdir}/systemtap/libHelperSDT_*.so; do
     done
 done
 
-%triggerun runtime-java -- java-1.7.0-openjdk, java-1.6.0-openjdk
+%triggerun runtime-java -- java-1.8.0-openjdk, java-1.7.0-openjdk, java-1.6.0-openjdk
 for f in %{_libexecdir}/systemtap/libHelperSDT_*.so; do
-    %ifarch %{ix86} %{power64}
-        %ifarch %{power64}
-            arch=ppc64
-	%else
-	    arch=i386
-	%endif
+    %ifarch %{ix86}
+        arch=i386
     %else
         arch=`basename $f | cut -f2 -d_ | cut -f1 -d.`
     %endif
@@ -825,15 +805,11 @@ for f in %{_libexecdir}/systemtap/libHelperSDT_*.so; do
     done
 done
 
-%triggerpostun runtime-java -- java-1.7.0-openjdk, java-1.6.0-openjdk
+%triggerpostun runtime-java -- java-1.8.0-openjdk, java-1.7.0-openjdk, java-1.6.0-openjdk
 # Restore links for any JDKs remaining after a package removal:
 for f in %{_libexecdir}/systemtap/libHelperSDT_*.so; do
-    %ifarch %{ix86} %{power64}
-        %ifarch %{power64}
-            arch=ppc64
-	%else
-	    arch=i386
-	%endif
+    %ifarch %{ix86}
+    	arch=i386
     %else
         arch=`basename $f | cut -f2 -d_ | cut -f1 -d.`
     %endif
@@ -958,9 +934,7 @@ done
 %if %{with_docs}
 %doc docs.installed/*.pdf
 %doc docs.installed/tapsets/*.html
-%if %{with_publican}
 %doc docs.installed/SystemTap_Beginners_Guide
-%endif
 %endif
 %{_bindir}/stap
 %{_bindir}/stap-prep
@@ -969,6 +943,7 @@ done
 %{_mandir}/man1/stap-prep.1*
 %{_mandir}/man1/stap-merge.1*
 %{_mandir}/man1/stap-report.1*
+%{_mandir}/man1/stapref.1*
 %{_mandir}/man3/*
 %{_mandir}/man7/error*
 %{_mandir}/man7/stappaths.7*
@@ -1047,11 +1022,38 @@ done
 #   http://sourceware.org/systemtap/wiki/SystemTapReleases
 
 %changelog
-* Thu Apr 30 2015 Frank Ch. Eigler <fche@redhat.com> - 2.6-10
-- append upstream PR18361 to xfs & signing patch, to catch up with kernel change
+* Wed Sep 02 2015 Frank Ch. Eigler <fche@redhat.com> - 2.8-10
+- rhbz1257399: module-init probes
 
-* Tue Apr 28 2015 Frank Ch. Eigler <fche@redhat.com> - 2.6-9
-- rhbz1216230=rhbz1212658 (xfs & signing)
+* Tue Aug 11 2015 Frank Ch. Eigler <fche@redhat.com> - 2.8-9
+- rhbz1254856: nfsd tapset fix for kernel functions that went away
+
+* Tue Aug 11 2015 Frank Ch. Eigler <fche@redhat.com> - 2.8-8
+- rhbz1252436: timer probes build fix
+
+* Mon Aug 10 2015 Frank Ch. Eigler <fche@redhat.com> - 2.8-7
+- rhbz1248159: netfilter probes build fix
+- disabling docs on ppc64le for bz1252103
+
+* Wed Jul 22 2015 Frank Ch. Eigler <fche@redhat.com> - 2.8-6
+- rhbz1242992: cont'd: applying .spec hunk here
+
+* Tue Jul 21 2015 Frank Ch. Eigler <fche@redhat.com> - 2.8-5
+- rhbz1242992: java / ppc64
+
+* Mon Jul  6 2015 Frank Ch. Eigler <fche@redhat.com> - 2.8-3
+- rhbz1237098: handle symbol-table vs. linkage-name mismatches better
+- some runtime robustification fixes backported from upstream
+
+* Wed Jun 17 2015 Frank Ch. Eigler <fche@redhat.com> - 2.8-1
+- Upstream release
+
+* Mon May 11 2015 Frank Ch. Eigler <fche@redhat.com> - 2.7-2
+- Upstream release, incl. rhel6.7 post-release xmltohtml patch
+- pre-rebase-rebase for aarch64 mass-rebuild
+
+* Wed Dec 10 2014 Frank Ch. Eigler <fche@redhat.com> - 2.6-9
+- rhbz1212658 (xfs & signing)
 
 * Wed Dec 10 2014 Frank Ch. Eigler <fche@redhat.com> - 2.6-8
 - rhbz1171823 (nfsd svc_fh access)

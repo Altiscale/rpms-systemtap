@@ -1,0 +1,68 @@
+commit 86f726b7785a035a2d6bc9ec2642c46621587d23
+Author: David Smith <dsmith@redhat.com>
+Date:   Tue Jul 7 14:01:27 2015 -0500
+
+    Fixed PR18634 by getting timer probes to compile on rawhide.
+    
+    * runtime/linux/timer.c (_stp_hrtimer_init): If STAPCONF_HRTIMER_GET_RES
+      isn't defined, meaning hrtimer_get_res() doesn't exist, just use the
+      'hrtimer_resolution' variable.
+    * buildrun.cxx (compile_pass): Add an export test for hrtimer_get_res().
+    * translate.cxx (emit_common_header): Remove generated inclusion of
+      linux/hrtimer.h.
+    * runtime/linux/timer.h: Add inclusion of linux/hrtimer.h.
+
+diff --git a/buildrun.cxx b/buildrun.cxx
+index 37b989f..e4b2697 100644
+--- a/buildrun.cxx
++++ b/buildrun.cxx
+@@ -310,6 +310,7 @@ compile_pass (systemtap_session& s)
+   o << "$(STAPCONF_HEADER):" << endl;
+   o << "\t@echo -n > $@" << endl;
+   output_autoconf(s, o, "autoconf-hrtimer-rel.c", "STAPCONF_HRTIMER_REL", NULL);
++  output_exportconf(s, o, "hrtimer_get_res", "STAPCONF_HRTIMER_GET_RES");
+   output_autoconf(s, o, "autoconf-generated-compile.c", "STAPCONF_GENERATED_COMPILE", NULL);
+   output_autoconf(s, o, "autoconf-hrtimer-getset-expires.c", "STAPCONF_HRTIMER_GETSET_EXPIRES", NULL);
+   output_autoconf(s, o, "autoconf-inode-private.c", "STAPCONF_INODE_PRIVATE", NULL);
+diff --git a/runtime/linux/timer.c b/runtime/linux/timer.c
+index 03d8f3f..f24a5ee 100644
+--- a/runtime/linux/timer.c
++++ b/runtime/linux/timer.c
+@@ -15,9 +15,13 @@
+ 
+ static void _stp_hrtimer_init(void)
+ {
++#if defined(STAPCONF_HRTIMER_GET_RES)
+ 	struct timespec res;
+ 	hrtimer_get_res (CLOCK_MONOTONIC, &res);
+ 	stap_hrtimer_resolution = timespec_to_ns(&res);
++#else
++	stap_hrtimer_resolution = hrtimer_resolution;
++#endif
+ }
+ 
+ 
+diff --git a/runtime/linux/timer.h b/runtime/linux/timer.h
+index e9a5271..e7e0bb6 100644
+--- a/runtime/linux/timer.h
++++ b/runtime/linux/timer.h
+@@ -15,6 +15,7 @@
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,17)
+ #error "hrtimers not implemented"
+ #else /* kernel version >= 2.6.17 */
++#include <linux/hrtimer.h>
+ 
+ static unsigned long stap_hrtimer_resolution = 0;
+ 
+diff --git a/translate.cxx b/translate.cxx
+index 390a73e..6e335b2 100644
+--- a/translate.cxx
++++ b/translate.cxx
+@@ -1177,7 +1177,6 @@ c_unparser::emit_common_header ()
+       o->newline(-1)  << "}";
+ 
+       o->newline( 0)  << "#ifdef STP_ON_THE_FLY_TIMER_ENABLE";
+-      o->newline( 0)  << "#include <linux/hrtimer.h>";
+       o->newline( 0)  << "#include \"timer.h\"";
+       o->newline( 0)  << "static struct hrtimer module_refresh_timer;";
+ 

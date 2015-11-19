@@ -1,0 +1,530 @@
+commit 0caa975190e4d2b19e7b65a0b23a7700522aa5d7
+Author: Frank Ch. Eigler <fche@redhat.com>
+Date:   Mon Aug 31 11:17:33 2015 -0400
+
+    PR18889 part: improve module-notification related debug tracing
+    
+    -DDEBUG_KPROBES -DDEBUG_SYMBOLS -DDEBUG_STP_ON_THE_FLY recommended.
+
+diff --git a/runtime/linux/kprobes.c b/runtime/linux/kprobes.c
+index 47eb29a..54c224e 100644
+--- a/runtime/linux/kprobes.c
++++ b/runtime/linux/kprobes.c
+@@ -567,6 +567,8 @@ stapkp_refresh(const char *modname,
+ {
+    size_t i;
+ 
++   dbug_stapkp("refresh %lu probes with module %s\n", nprobes, modname ?: "?");
++
+    for (i = 0; i < nprobes; i++) {
+ 
+       struct stap_dwarf_probe *sdp = &probes[i];
+diff --git a/runtime/transport/symbols.c b/runtime/transport/symbols.c
+index fe576c1..9ea2b5b 100644
+--- a/runtime/transport/symbols.c
++++ b/runtime/transport/symbols.c
+@@ -1,7 +1,7 @@
+-/* -*- linux-c -*- 
++/* -*- linux-c -*-
+  * symbols.c - stp symbol and module functions
+  *
+- * Copyright (C) Red Hat Inc, 2006-2012
++ * Copyright (C) Red Hat Inc, 2006-2015
+  *
+  * This file is part of systemtap, and is free software.  You can
+  * redistribute it and/or modify it under the terms of the GNU General
+@@ -121,10 +121,26 @@ static unsigned _stp_module_nsections (struct module_sect_attrs *attrs)
+ static int _stp_module_notifier (struct notifier_block * nb,
+                                  unsigned long val, void *data)
+ {
++        struct module *mod = data;
++        struct module_sect_attrs *attrs;
++        unsigned i, nsections;
++
++        (void) attrs;
++        (void) i;
++        (void) nsections;
++
++        if (!mod) { // so as to avoid null pointer checks later
++                WARN_ON (!mod);
++                return NOTIFY_DONE;
++        }
++
++        dbug_sym(1, "module notify %lu %s attrs %p\n",
++                 val, mod->name, mod->sect_attrs);
++
+         /* Prior to 2.6.11, struct module contained a module_sections
+            attribute vector rather than module_sect_attrs.  Prior to
+            2.6.19, module_sect_attrs lacked a number-of-sections
+-           field.  Past 3.8, MODULE_STATE_COMING is sent too early to 
++           field.  Past 3.8, MODULE_STATE_COMING is sent too early to
+            let us probe module init functions.
+ 
+            Without CONFIG_KALLSYMS, we don't get any of the
+@@ -132,11 +148,6 @@ static int _stp_module_notifier (struct notifier_block * nb,
+            that directly? */
+ 
+ #if defined(CONFIG_KALLSYMS) && LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,11)
+-        struct module *mod = data;
+-        struct module_sect_attrs *attrs;
+-        unsigned i, nsections;
+-        WARN_ON (!mod);
+-
+         if (val == MODULE_STATE_COMING ||
+             val == MODULE_STATE_LIVE) {
+                 /* A module is arriving or has arrived.  Register all
+@@ -145,6 +156,7 @@ static int _stp_module_notifier (struct notifier_block * nb,
+                    did the fishie go? */
+ 
+                 attrs = mod->sect_attrs;
++                dbug_sym(1, "module_sect_attrs: %p\n", attrs);
+                 if (attrs == NULL) // until add_sect_attrs(), may be zero
+                         return NOTIFY_DONE; // remain ignorant
+ 
+@@ -153,7 +165,7 @@ static int _stp_module_notifier (struct notifier_block * nb,
+                         int init_p = (strstr(attrs->attrs[i].name, "init.") != NULL);
+                         int init_gone_p = (val == MODULE_STATE_LIVE); // likely already unloaded
+ 
+-                        _stp_kmodule_update_address(mod->name, 
++                        _stp_kmodule_update_address(mod->name,
+                                                     attrs->attrs[i].name,
+                                                     ((init_p && init_gone_p) ? 0 : attrs->attrs[i].address));
+                 }
+@@ -161,7 +173,7 @@ static int _stp_module_notifier (struct notifier_block * nb,
+                 /* Verify build-id. */
+                 if (_stp_kmodule_check (mod->name))
+                    _stp_kmodule_update_address(mod->name, NULL, 0); /* Pretend it was never here. */
+-        }        
++        }
+         else if (val == MODULE_STATE_GOING) {
+                 /* Unregister all sections. */
+                 _stp_kmodule_update_address(mod->name, NULL, 0);
+
+commit 2278079efc01124dd509241f6c6eadbd6e19cb2a
+Author: Frank Ch. Eigler <fche@redhat.com>
+Date:   Mon Aug 31 17:46:43 2015 -0400
+
+    PR18889 part: module-init notification via module_{load,free} tracepoints
+    
+    Investigating RHBZ1257399 et al., we found that module_notifier is
+    being called too early after kernel commit #4982223e51.  This
+    precludes normal module section-address computation and thus kprobe
+    emplacement.  This patch adds hooking into the module_{load,free}
+    tracepoints in parallel, because on some kernels (RHEL7.1.Z+) they
+    occur at just the right time.
+    
+    On the downside, on recent LKML kernels, attaching to those
+    tracepoints requires EXPORT_TRACEPOINT_SYMBOL_GPL's, so until that is
+    done (or another workaround made), LKML kernels will still miss out on
+    module-init probing.
+
+diff --git a/buildrun.cxx b/buildrun.cxx
+index d7a431d..6d66b5a 100644
+--- a/buildrun.cxx
++++ b/buildrun.cxx
+@@ -1,5 +1,5 @@
+ // build/run probes
+-// Copyright (C) 2005-2014 Red Hat Inc.
++// Copyright (C) 2005-2015 Red Hat Inc.
+ //
+ // This file is part of systemtap, and is free software.  You can
+ // redistribute it and/or modify it under the terms of the GNU General
+@@ -377,8 +377,10 @@ compile_pass (systemtap_session& s)
+   output_exportconf(s, o, "proc_create_data", "STAPCONF_PROC_CREATE_DATA");
+   output_exportconf(s, o, "PDE_DATA", "STAPCONF_PDE_DATA");
+   output_autoconf(s, o, "autoconf-module-sect-attrs.c", "STAPCONF_MODULE_SECT_ATTRS", NULL);
+-
+   output_autoconf(s, o, "autoconf-utrace-via-tracepoints.c", "STAPCONF_UTRACE_VIA_TRACEPOINTS", NULL);
++  output_autoconf(s, o, "autoconf-module-tracepoints.c", "STAPCONF_MODULE_TRACEPOINT", NULL);
++  output_exportconf(s, o, "__tracepoint_module_load", "STAPCONF_MODULE_TRACEPOINT_EXPORT_LOAD");
++  output_exportconf(s, o, "__tracepoint_module_free", "STAPCONF_MODULE_TRACEPOINT_EXPORT_FREE");
+   output_autoconf(s, o, "autoconf-task_work-struct.c", "STAPCONF_TASK_WORK_STRUCT", NULL);
+   output_autoconf(s, o, "autoconf-vm-area-pte.c", "STAPCONF_VM_AREA_PTE", NULL);
+   output_autoconf(s, o, "autoconf-relay-umode_t.c", "STAPCONF_RELAY_UMODE_T", NULL);
+diff --git a/runtime/linux/autoconf-module-tracepoints.c b/runtime/linux/autoconf-module-tracepoints.c
+new file mode 100644
+index 0000000..77b938e
+--- /dev/null
++++ b/runtime/linux/autoconf-module-tracepoints.c
+@@ -0,0 +1,31 @@
++#include <linux/module.h>
++#include <trace/events/module.h>
++
++// NB: in kernels which do have the requisite pieces, just unconfigured, then
++// everything below will compile just fine, only returning ENOSYS at runtime.
++// To get the compile-time error that autoconf needs, check it directly:
++#ifndef CONFIG_TRACEPOINTS
++#error "CONFIG_TRACEPOINTS is not enabled"
++#endif
++
++// presuming void *data-parametrized tracepoint callback api
++
++void __module_load(void *cb_data, struct module* mod)
++{
++        (void) cb_data;
++        (void) mod;
++	return;
++}
++
++void __module_free(void *cb_data, struct module* mod)
++{
++        (void) cb_data;
++        (void) mod;
++	return;
++}
++
++void __autoconf_func(void)
++{
++	(void) register_trace_module_load(__module_load, NULL);
++        (void) register_trace_module_free(__module_free, NULL);
++}
+diff --git a/runtime/transport/symbols.c b/runtime/transport/symbols.c
+index 9ea2b5b..4266e5d 100644
+--- a/runtime/transport/symbols.c
++++ b/runtime/transport/symbols.c
+@@ -125,6 +125,7 @@ static int _stp_module_notifier (struct notifier_block * nb,
+         struct module_sect_attrs *attrs;
+         unsigned i, nsections;
+ 
++        (void) nb;
+         (void) attrs;
+         (void) i;
+         (void) nsections;
+@@ -191,6 +192,21 @@ static int _stp_module_notifier (struct notifier_block * nb,
+         return NOTIFY_DONE;
+ }
+ 
++
++#ifdef STAPCONF_MODULE_TRACEPOINT
++/* We just delegate to the canonical notifier function */
++static void _stp_module_load_tp(void *data, struct module* mod)
++{
++        (void) _stp_module_notifier (NULL, MODULE_STATE_COMING, mod);
++        
++}
++static void _stp_module_free_tp(void *data, struct module* mod)
++{
++        (void) _stp_module_notifier (NULL, MODULE_STATE_GOING, mod);
++}
++#endif
++
++
+ static int _stp_module_update_self (void)
+ {
+ 	/* Only bother if we need unwinding and have module_sect_attrs.  */
+diff --git a/runtime/transport/transport.c b/runtime/transport/transport.c
+index 54e9b41..e069a3d 100644
+--- a/runtime/transport/transport.c
++++ b/runtime/transport/transport.c
+@@ -21,6 +21,23 @@
+ #include <linux/delay.h>
+ #include <linux/mutex.h>
+ #include "../uidgid_compatibility.h"
++#ifdef STAPCONF_MODULE_TRACEPOINT
++#include <trace/events/module.h>
++#endif
++
++/* PR18889: After 3.17, commit #de7b2973903c6, tracepoints are
++   attached by symbol-address rather than by name string.  That means
++   they must be EXPORT_TRACEPOINT_SYMBOL_GPL'd for a tracepoint
++   [un]register operation.  On RHEL7 kernels with out that commit
++   backported, we can do a tracepoint attach even without the exports.  */
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,17,0)
++#if defined(STAPCONF_MODULE_TRACEPOINT) && defined(STAPCONF_MODULE_TRACEPOINT_EXPORT_LOAD) && defined(STAPCONF_MODULE_TRACEPOINT_EXPORT_FREE)
++#define STAP_USE_MODULE_TRACEPOINTS
++#endif
++#elif defined(STAPCONF_MODULE_TRACEPOINT)
++#define STAP_USE_MODULE_TRACEPOINTS
++#endif
++
+ 
+ static int _stp_exit_flag = 0;
+ 
+@@ -83,6 +100,11 @@ static void systemtap_module_exit(void);
+ static int systemtap_module_init(void);
+ 
+ static int _stp_module_notifier_active = 0;
++#ifdef STAPCONF_MODULE_TRACEPOINT
++/* callbacks in runtime/transport/symbols.c */
++static void _stp_module_load_tp(void *data, struct module* mod);
++static void _stp_module_free_tp(void *data, struct module* mod);
++#endif
+ static int _stp_module_notifier (struct notifier_block * nb,
+                                  unsigned long val, void *data);
+ static struct notifier_block _stp_module_notifier_nb = {
+@@ -158,11 +180,30 @@ static void _stp_handle_start(struct _stp_msg_start *st)
+                            failed: something nasty has happened, and
+                            we want no further probing started.  PR16766 */
+                         if (!_stp_module_notifier_active) {
+-                                int rc = register_module_notifier(& _stp_module_notifier_nb);
+-                                if (rc == 0)
+-                                        _stp_module_notifier_active = 1;
+-                                else
+-                                        _stp_warn ("Cannot register module notifier (%d)\n", rc);
++#ifdef STAP_USE_MODULE_TRACEPOINTS
++                                int rc0 = register_trace_module_load (& _stp_module_load_tp, NULL);
++                                if (rc0)
++                                        _stp_warn ("Cannot register module load tracepoint (%d)\n", rc0);
++                                else {
++                                        int rc1 = register_trace_module_free (& _stp_module_free_tp, NULL);
++                                        if (rc1) {
++                                                _stp_warn ("Cannot register module free tracepoint (%d)\n", rc1);
++                                                unregister_trace_module_load(& _stp_module_load_tp, NULL);
++                                        } else {
++#endif
++                                                int rc = register_module_notifier(& _stp_module_notifier_nb);
++                                                if (rc == 0)
++                                                        _stp_module_notifier_active = 1;
++                                                else {
++                                                        _stp_warn ("Cannot register module notifier (%d)\n", rc);
++#ifdef STAP_USE_MODULE_TRACEPOINTS
++                                                        unregister_trace_module_load(& _stp_module_load_tp, NULL);
++                                                        unregister_trace_module_free(& _stp_module_free_tp, NULL);
++                                                        
++                                                }
++                                        }
++#endif
++                                }
+                         }
+                 }
+ 
+@@ -198,7 +239,12 @@ static void _stp_cleanup_and_exit(int send_exit)
+ 
+ 	        /* Unregister the module notifier. */
+ 	        if (_stp_module_notifier_active) {
+-                        int rc = unregister_module_notifier(& _stp_module_notifier_nb);
++                        int rc;
++#ifdef STAP_USE_MODULE_TRACEPOINTS
++                        unregister_trace_module_load(& _stp_module_load_tp, NULL);
++                        unregister_trace_module_free(& _stp_module_free_tp, NULL);
++#endif
++                        rc = unregister_module_notifier(& _stp_module_notifier_nb);
+                         if (rc)
+                                 _stp_warn("module_notifier unregister error %d", rc);
+ 	                _stp_module_notifier_active = 0;
+
+commit 2e67c14dad1c661d2ce0b0ed218b371c1af218ba
+Author: Frank Ch. Eigler <fche@redhat.com>
+Date:   Wed Sep 2 11:16:46 2015 -0400
+
+    PR18889: switch to STP_TRACEPOINT* frontend for kernel tracepoint registration
+    
+    jistone kindly reminded that the runtime/stp_tracepoint.[ch] machinery
+    allows us to attach to kernel tracepoints, whether on string- or
+    tp*-based kernel APIs, and whether or not the tp* objects are
+    EXPORT_TRACEPOINT_SYMBOL_GPL'd.  Let's use those; presto we get
+    module-init probing back on kernels oldish and newish.
+
+diff --git a/buildrun.cxx b/buildrun.cxx
+index 6d66b5a..2ca5933 100644
+--- a/buildrun.cxx
++++ b/buildrun.cxx
+@@ -379,8 +379,6 @@ compile_pass (systemtap_session& s)
+   output_autoconf(s, o, "autoconf-module-sect-attrs.c", "STAPCONF_MODULE_SECT_ATTRS", NULL);
+   output_autoconf(s, o, "autoconf-utrace-via-tracepoints.c", "STAPCONF_UTRACE_VIA_TRACEPOINTS", NULL);
+   output_autoconf(s, o, "autoconf-module-tracepoints.c", "STAPCONF_MODULE_TRACEPOINT", NULL);
+-  output_exportconf(s, o, "__tracepoint_module_load", "STAPCONF_MODULE_TRACEPOINT_EXPORT_LOAD");
+-  output_exportconf(s, o, "__tracepoint_module_free", "STAPCONF_MODULE_TRACEPOINT_EXPORT_FREE");
+   output_autoconf(s, o, "autoconf-task_work-struct.c", "STAPCONF_TASK_WORK_STRUCT", NULL);
+   output_autoconf(s, o, "autoconf-vm-area-pte.c", "STAPCONF_VM_AREA_PTE", NULL);
+   output_autoconf(s, o, "autoconf-relay-umode_t.c", "STAPCONF_RELAY_UMODE_T", NULL);
+diff --git a/runtime/transport/transport.c b/runtime/transport/transport.c
+index e069a3d..db7de46 100644
+--- a/runtime/transport/transport.c
++++ b/runtime/transport/transport.c
+@@ -1,8 +1,8 @@
+-/* -*- linux-c -*- 
++/* -*- linux-c -*-
+  * transport.c - stp transport functions
+  *
+  * Copyright (C) IBM Corporation, 2005
+- * Copyright (C) Red Hat Inc, 2005-2014
++ * Copyright (C) Red Hat Inc, 2005-2015
+  * Copyright (C) Intel Corporation, 2006
+  *
+  * This file is part of systemtap, and is free software.  You can
+@@ -23,19 +23,7 @@
+ #include "../uidgid_compatibility.h"
+ #ifdef STAPCONF_MODULE_TRACEPOINT
+ #include <trace/events/module.h>
+-#endif
+-
+-/* PR18889: After 3.17, commit #de7b2973903c6, tracepoints are
+-   attached by symbol-address rather than by name string.  That means
+-   they must be EXPORT_TRACEPOINT_SYMBOL_GPL'd for a tracepoint
+-   [un]register operation.  On RHEL7 kernels with out that commit
+-   backported, we can do a tracepoint attach even without the exports.  */
+-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,17,0)
+-#if defined(STAPCONF_MODULE_TRACEPOINT) && defined(STAPCONF_MODULE_TRACEPOINT_EXPORT_LOAD) && defined(STAPCONF_MODULE_TRACEPOINT_EXPORT_FREE)
+-#define STAP_USE_MODULE_TRACEPOINTS
+-#endif
+-#elif defined(STAPCONF_MODULE_TRACEPOINT)
+-#define STAP_USE_MODULE_TRACEPOINTS
++#include "../linux/stp_tracepoint.h"
+ #endif
+ 
+ 
+@@ -149,7 +137,7 @@ static void _stp_handle_start(struct _stp_msg_start *st)
+         // protect against excessive or premature startup
+ 	handle_startup = (! _stp_start_called && ! _stp_exit_called);
+ 	_stp_start_called = 1;
+-	
++
+ 	if (handle_startup) {
+ 		dbug_trans(1, "stp_handle_start\n");
+ 
+@@ -180,15 +168,15 @@ static void _stp_handle_start(struct _stp_msg_start *st)
+                            failed: something nasty has happened, and
+                            we want no further probing started.  PR16766 */
+                         if (!_stp_module_notifier_active) {
+-#ifdef STAP_USE_MODULE_TRACEPOINTS
+-                                int rc0 = register_trace_module_load (& _stp_module_load_tp, NULL);
++#ifdef STAPCONF_MODULE_TRACEPOINT
++                                int rc0 = STP_TRACE_REGISTER(module_load, & _stp_module_load_tp);
+                                 if (rc0)
+                                         _stp_warn ("Cannot register module load tracepoint (%d)\n", rc0);
+                                 else {
+-                                        int rc1 = register_trace_module_free (& _stp_module_free_tp, NULL);
++                                        int rc1 = STP_TRACE_REGISTER(module_free, & _stp_module_free_tp);
+                                         if (rc1) {
+                                                 _stp_warn ("Cannot register module free tracepoint (%d)\n", rc1);
+-                                                unregister_trace_module_load(& _stp_module_load_tp, NULL);
++                                                STP_TRACE_UNREGISTER(module_load, & _stp_module_load_tp);
+                                         } else {
+ #endif
+                                                 int rc = register_module_notifier(& _stp_module_notifier_nb);
+@@ -196,10 +184,9 @@ static void _stp_handle_start(struct _stp_msg_start *st)
+                                                         _stp_module_notifier_active = 1;
+                                                 else {
+                                                         _stp_warn ("Cannot register module notifier (%d)\n", rc);
+-#ifdef STAP_USE_MODULE_TRACEPOINTS
+-                                                        unregister_trace_module_load(& _stp_module_load_tp, NULL);
+-                                                        unregister_trace_module_free(& _stp_module_free_tp, NULL);
+-                                                        
++#ifdef STAPCONF_MODULE_TRACEPOINT
++                                                        STP_TRACE_UNREGISTER(module_load, & _stp_module_load_tp);
++                                                        STP_TRACE_UNREGISTER(module_free, & _stp_module_free_tp);
+                                                 }
+                                         }
+ #endif
+@@ -240,9 +227,9 @@ static void _stp_cleanup_and_exit(int send_exit)
+ 	        /* Unregister the module notifier. */
+ 	        if (_stp_module_notifier_active) {
+                         int rc;
+-#ifdef STAP_USE_MODULE_TRACEPOINTS
+-                        unregister_trace_module_load(& _stp_module_load_tp, NULL);
+-                        unregister_trace_module_free(& _stp_module_free_tp, NULL);
++#ifdef STAPCONF_MODULE_TRACEPOINT
++                        STP_TRACE_UNREGISTER(module_load, & _stp_module_load_tp);
++                        STP_TRACE_UNREGISTER(module_free, & _stp_module_free_tp);
+ #endif
+                         rc = unregister_module_notifier(& _stp_module_notifier_nb);
+                         if (rc)
+@@ -380,7 +367,7 @@ static void _stp_ctl_work_callback(unsigned long val)
+  *	_stp_transport_close - close ctl and relayfs channels
+  *
+  *	This is called automatically when the module is unloaded.
+- *     
++ *
+  */
+ static void _stp_transport_close(void)
+ {
+@@ -397,7 +384,7 @@ static void _stp_transport_close(void)
+ 
+ /**
+  * _stp_transport_init() is called from the module initialization.
+- *   It does the bare minimum to exchange commands with staprun 
++ *   It does the bare minimum to exchange commands with staprun
+  */
+ static int _stp_transport_init(void)
+ {
+@@ -657,7 +644,7 @@ static struct dentry *_stp_get_module_dir(void)
+ static int _stp_transport_fs_init(const char *module_name)
+ {
+ 	struct dentry *root_dir;
+-    
++
+ 	dbug_trans(1, "entry\n");
+ 	if (module_name == NULL)
+ 		return -1;
+
+commit 578f5f6f6792fc92d74539a927cd85de5bcbb4dd
+Author: Frank Ch. Eigler <fche@redhat.com>
+Date:   Wed Sep 2 11:52:31 2015 -0400
+
+    PR18889 testing: already done by modules_out_of_tree.exp
+    
+    Ditch bz6503, given that it wasn't reliable.
+
+diff --git a/testsuite/systemtap.base/bz6503.exp b/testsuite/systemtap.base/bz6503.exp
+deleted file mode 100644
+index 5d4d2d0..0000000
+--- a/testsuite/systemtap.base/bz6503.exp
++++ /dev/null
+@@ -1,55 +0,0 @@
+-# Note that this test is *really* testing the bug fix for pr6503:
+-#   permit probes on module .init and __exit functions
+-#   <http://sourceware.org/bugzilla/show_bug.cgi?id=6503>
+-#
+-# Not BZ6503:
+-#   ypserve does not work
+-#   <https://bugzilla.redhat.com/show_bug.cgi?id=6503>
+-#
+-# Unfortunately, PR17249 indicates that module-init probes
+-# have subsequently broken (due to kernel notification timing
+-# changes).
+-#
+-
+-set test bz6503
+-
+-if {! [installtest_p]} {
+-    untested "$test"
+-    return
+-}
+-
+-# If we aren't root, make sure the test still succeeds.
+-set effective_pid [exec /usr/bin/id -u]
+-if {$effective_pid != 0} {
+-    set root_cmd "sudo "
+-} else {
+-    set root_cmd ""
+-}
+-
+-
+-# jffs2/ext2/fat/vfat should cover a span of kernels.
+-#
+-# Note that this test might fail if there is a filesystem of one of
+-# these types already mounted.  The filesystem mount will be
+-# unaffected (since the module can't be removed).
+-spawn stap -t $srcdir/$subdir/bz6503.stp -c "( ($root_cmd /sbin/modprobe jffs2; $root_cmd /sbin/modprobe ext2; $root_cmd /sbin/modprobe fat; $root_cmd /sbin/modprobe vfat); wait; ($root_cmd /sbin/rmmod jffs2; $root_cmd /sbin/rmmod ext2; $root_cmd /sbin/rmmod vfat; $root_cmd /sbin/rmmod fat); wait) 2>/dev/null"
+-
+-set ok 0
+-set ko 0
+-expect {
+-    -timeout 60
+-    timeout { fail "$test (timeout)" }
+-    -re {^-----[^\r\n]*\r\n} { exp_continue }
+-    -re {^module[^\r\n]*hits:[^\r\n]*\r\n} { incr ok; exp_continue }
+-    -re {^WARNING:[\r\n]*\r\n} { incr ko; exp_continue }
+-    -re {^ERROR:[\r\n]*\r\n} { incr ko; exp_continue }
+-    eof { }
+-}
+-catch { close} ; catch { wait }
+-
+-# Mark kernels without module refresh support as xfail
+-if {![module_refresh_p]} { setup_xfail *-*-* }
+-
+-if {$ok > 0 && $ko == 0} then { pass "$test $ok" } else { fail "$test $ok $ko"}
+-
+-
+diff --git a/testsuite/systemtap.base/bz6503.stp b/testsuite/systemtap.base/bz6503.stp
+deleted file mode 100644
+index 409149f..0000000
+--- a/testsuite/systemtap.base/bz6503.stp
++++ /dev/null
+@@ -1,5 +0,0 @@
+-probe module("jffs2").function("*").call ?,
+-      module("ext2").function("*").call ?,
+-      module("fat").function("*").call ?,
+-      module("vfat").function("*").call ?,
+-      never { }

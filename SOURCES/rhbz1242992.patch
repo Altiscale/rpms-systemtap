@@ -1,0 +1,91 @@
+commit 00ddbc6920530ed042260719e4faf690c2d38541
+Author: Lukas Berk <lberk@redhat.com>
+Date:   Wed Jul 15 10:46:27 2015 -0400
+
+    Add ppc64le to java/Makefile.*
+    
+    java/Makefile.am - add JAVA_ARCH override for ppc64le
+    java/Makefile.in - add JAVA_ARCH override for ppc64le
+
+diff --git a/java/Makefile.am b/java/Makefile.am
+index bd1efe8..2d5bba0 100644
+--- a/java/Makefile.am
++++ b/java/Makefile.am
+@@ -10,6 +10,7 @@ override JAVA_ARCH:=$(JAVA_ARCH:i%86=i386)
+ override JAVA_ARCH:=$(JAVA_ARCH:sparcv9=sparc)
+ override JAVA_ARCH:=$(JAVA_ARCH:sparc64=sparcv9)
+ override JAVA_ARCH:=$(JAVA_ARCH:arm%=arm)
++override JAVA_ARCH:=$(JAVA_ARCH:powerpc64le%=ppc64le)
+ override JAVA_ARCH:=$(JAVA_ARCH:powerpc64%=ppc64)
+ 
+ # XXX: perhaps autoconfigure the following?
+diff --git a/java/Makefile.in b/java/Makefile.in
+index 5e9f5a7..f98c79b 100644
+--- a/java/Makefile.in
++++ b/java/Makefile.in
+@@ -725,6 +725,7 @@ override JAVA_ARCH:=$(JAVA_ARCH:i%86=i386)
+ override JAVA_ARCH:=$(JAVA_ARCH:sparcv9=sparc)
+ override JAVA_ARCH:=$(JAVA_ARCH:sparc64=sparcv9)
+ override JAVA_ARCH:=$(JAVA_ARCH:arm%=arm)
++override JAVA_ARCH:=$(JAVA_ARCH:powerpc64le%=ppc64le)
+ override JAVA_ARCH:=$(JAVA_ARCH:powerpc64%=ppc64)
+ @HAVE_JAVA_TRUE@$(HELPERSDT).class: $(srcdir)/$(HELPERSDT).java
+ @HAVE_JAVA_TRUE@	$(JAVAC) -d . $(srcdir)/$(HELPERSDT).java
+
+commit 5e5ec35cf1470bd52aca1bb73e76d205dcce01fc
+Author: Lukas Berk <lberk@redhat.com>
+Date:   Wed Jul 15 11:22:17 2015 -0400
+
+    systemtap.spec changes for ppc64{be,le} java helper library symlinking
+    
+    systemtap.spec - remove special clauses ppc64{be,le} linking
+
+diff --git a/systemtap.spec b/systemtap.spec
+index 39f2130..23d1173 100644
+--- a/systemtap.spec
++++ b/systemtap.spec
+@@ -775,12 +775,8 @@ exit 0
+ 
+ %triggerin runtime-java -- java-1.7.0-openjdk, java-1.6.0-openjdk
+ for f in %{_libexecdir}/systemtap/libHelperSDT_*.so; do
+-    %ifarch %{ix86} ppc64 ppc64le
+-        %ifarch ppc64 ppc64le
+-            arch=ppc64
+-	%else
+-	    arch=i386
+-	%endif
++    %ifarch %{ix86}
++	arch=i386
+     %else
+         arch=`basename $f | cut -f2 -d_ | cut -f1 -d.`
+     %endif
+@@ -794,12 +790,8 @@ done
+ 
+ %triggerun runtime-java -- java-1.7.0-openjdk, java-1.6.0-openjdk
+ for f in %{_libexecdir}/systemtap/libHelperSDT_*.so; do
+-    %ifarch %{ix86} ppc64 ppc64le
+-        %ifarch ppc64 ppc64le
+-            arch=ppc64
+-	%else
+-	    arch=i386
+-	%endif
++    %ifarch %{ix86}
++	arch=i386
+     %else
+         arch=`basename $f | cut -f2 -d_ | cut -f1 -d.`
+     %endif
+@@ -812,12 +804,8 @@ done
+ %triggerpostun runtime-java -- java-1.7.0-openjdk, java-1.6.0-openjdk
+ # Restore links for any JDKs remaining after a package removal:
+ for f in %{_libexecdir}/systemtap/libHelperSDT_*.so; do
+-    %ifarch %{ix86} ppc64 ppc64le
+-        %ifarch ppc64 ppc64le
+-            arch=ppc64
+-	%else
+-	    arch=i386
+-	%endif
++    %ifarch %{ix86}
++	arch=i386
+     %else
+         arch=`basename $f | cut -f2 -d_ | cut -f1 -d.`
+     %endif

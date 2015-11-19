@@ -1,0 +1,71 @@
+commit 3fc11ed07bad37dfefc866e24d92682d7ef1d819
+Author: David Smith <dsmith@redhat.com>
+Date:   Thu Aug 20 11:27:53 2015 -0500
+
+    Fix PR18856 by making nfsd.close optional.
+    
+    * tapset/linux/nfsd.stp: Make nfsd.close optional in nfsd.entries (and add
+      it optionally to nfsd.return), since the underlying probe point no
+      longer exists in kernels 4.2+. Also add nfsd.proc.commit.return to
+      nfsd.proc.return (to match nfsd.proc).
+    * testsuite/buildok/nfsd-detailed.stp: Make nfsd.close tests optional.
+
+diff --git a/tapset/linux/nfsd.stp b/tapset/linux/nfsd.stp
+index 7aebb9c..71956a1 100644
+--- a/tapset/linux/nfsd.stp
++++ b/tapset/linux/nfsd.stp
+@@ -211,6 +211,7 @@ probe nfsd.proc.entries = nfsd.proc.lookup,
+ probe nfsd.proc.return = nfsd.proc.lookup.return,
+                          nfsd.proc.read.return,
+                          nfsd.proc.write.return,
++                         nfsd.proc.commit.return,
+                          nfsd.proc.remove.return,
+                          nfsd.proc.rename.return,
+                          nfsd.proc.create.return
+@@ -1064,7 +1065,7 @@ probe nfsd.entries = nfsd.open,
+                      nfsd.createv3,
+                      nfsd.unlink,
+                      nfsd.rename,
+-                     nfsd.close
++                     nfsd.close ?
+ {}
+ 
+ probe nfsd.return = nfsd.open.return,
+@@ -1075,7 +1076,8 @@ probe nfsd.return = nfsd.open.return,
+                     nfsd.create.return,
+                     nfsd.createv3.return,
+                     nfsd.unlink.return,
+-                    nfsd.rename.return
++                    nfsd.rename.return,
++		    nfsd.close.return ?
+ {}
+ 
+ /**
+@@ -1113,6 +1115,8 @@ probe nfsd.open.return = kernel.function("nfsd_open").return !,
+  * probe nfsd.close - NFS server closing a file for client
+  *
+  * @filename: file name
++ *
++ * This probe point does not exist in kernels starting with 4.2.
+  */
+ probe nfsd.close = __nfsd.call_close ?, __nfsd.inlined_close ?
+ {
+diff --git a/testsuite/buildok/nfsd-detailed.stp b/testsuite/buildok/nfsd-detailed.stp
+index 627f3a2..f862079 100755
+--- a/testsuite/buildok/nfsd-detailed.stp
++++ b/testsuite/buildok/nfsd-detailed.stp
+@@ -229,12 +229,12 @@ probe nfsd.open.return
+ # nfsd.close tests
+ #
+ 
+-probe nfsd.close
++probe nfsd.close ?
+ {
+ 	printf("%s(%s)\n", name, argstr)
+ 	printf("%s\n", client_ip)
+ }
+-probe nfsd.close.return
++probe nfsd.close.return ?
+ {
+ 	printf("%s(%s)\n", name, retstr)
+ }

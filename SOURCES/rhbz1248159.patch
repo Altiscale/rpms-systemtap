@@ -1,0 +1,76 @@
+commit 7cfb10eca050964b22bc8f25dd4682b409434078
+Author: Martin Cermak <mcermak@redhat.com>
+Date:   Fri Jul 31 17:40:18 2015 +0200
+
+    Fix PR18711 by updating the netfilter code for new rhel-7.2 kernels.
+    
+    * buildrun.cxx (compile_pass): Add new netfilter autoconf test.
+    * runtime/linux/autoconf-netfilter-313b.c: New autoconf test.
+    * tapset-netfilter.cxx: (emit_module_decls): Add support for new
+      netfilter code backported to kernel-3.10.0-284.el7.
+
+diff --git a/buildrun.cxx b/buildrun.cxx
+index e4b2697..d7a431d 100644
+--- a/buildrun.cxx
++++ b/buildrun.cxx
+@@ -385,6 +385,7 @@ compile_pass (systemtap_session& s)
+   output_autoconf(s, o, "autoconf-fs_supers-hlist.c", "STAPCONF_FS_SUPERS_HLIST", NULL);
+   output_autoconf(s, o, "autoconf-compat_sigaction.c", "STAPCONF_COMPAT_SIGACTION", NULL);
+   output_autoconf(s, o, "autoconf-netfilter.c", "STAPCONF_NETFILTER_V313", NULL);
++  output_autoconf(s, o, "autoconf-netfilter-313b.c", "STAPCONF_NETFILTER_V313B", NULL);
+   output_autoconf(s, o, "autoconf-netfilter-4_1.c", "STAPCONF_NETFILTER_V41", NULL);
+   output_autoconf(s, o, "autoconf-smpcall-5args.c", "STAPCONF_SMPCALL_5ARGS", NULL);
+   output_autoconf(s, o, "autoconf-smpcall-4args.c", "STAPCONF_SMPCALL_4ARGS", NULL);
+diff --git a/runtime/linux/autoconf-netfilter-313b.c b/runtime/linux/autoconf-netfilter-313b.c
+new file mode 100644
+index 0000000..3b18830
+--- /dev/null
++++ b/runtime/linux/autoconf-netfilter-313b.c
+@@ -0,0 +1,22 @@
++#include <linux/netfilter.h>
++
++// Similarly to autoconf-netfilter-4_1.c, this autoconf test covers
++// backport of kernel patch 238e54c9cb9385a1ba99e92801f3615a2fb398b6
++// to kernel-3.10.0-284.el7 per rhbz1230935#c4 as patch no 119478.
++// This fixes PR18711.
++
++unsigned int
++new_style_hook(const struct nf_hook_ops *ops,
++		 struct sk_buff *skb,
++		 const struct net_device *nf_in,
++		 const struct net_device *nf_out,
++		 const struct nf_hook_state *state)
++{
++  (void) ops; (void) skb; (void) nf_in; (void) nf_out; (void) state;
++  return 0;
++}
++
++struct nf_hook_ops netfilter_ops = {
++  .hook = new_style_hook
++};
++
+diff --git a/tapset-netfilter.cxx b/tapset-netfilter.cxx
+index 12df8d7..a820b8d 100644
+--- a/tapset-netfilter.cxx
++++ b/tapset-netfilter.cxx
+@@ -277,6 +277,11 @@ netfilter_derived_probe_group::emit_module_decls (systemtap_session& s)
+       s.op->newline() << "(const struct nf_hook_ops *nf_ops, struct sk_buff *nf_skb, const struct net_device *nf_in, const struct net_device *nf_out, int (*nf_okfn)(struct sk_buff *))";
+       s.op->newline() << "{";
+ 
++      s.op->newline() << "#elif defined(STAPCONF_NETFILTER_V313B)";
++
++      s.op->newline() << "(const struct nf_hook_ops *nf_ops, struct sk_buff *nf_skb, const struct net_device *nf_in, const struct net_device *nf_out, const struct nf_hook_state *nf_state)";
++      s.op->newline() << "{";
++
+       s.op->newline() << "#elif LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22)";
+ 
+       s.op->newline() << "(unsigned int nf_hooknum, struct sk_buff *nf_skb, const struct net_device *nf_in, const struct net_device *nf_out, int (*nf_okfn)(struct sk_buff *))";
+@@ -291,7 +296,7 @@ netfilter_derived_probe_group::emit_module_decls (systemtap_session& s)
+       s.op->newline(-1) << "#endif";
+       s.op->newline(1) << "const struct stap_probe * const stp = & stap_probes[" << np->session_index << "];";
+       s.op->newline() << "int nf_verdict = NF_ACCEPT;"; // default NF_ACCEPT, to be used by $verdict context var
+-      s.op->newline() << "#if defined(STAPCONF_NETFILTER_V313) || defined(STAPCONF_NETFILTER_V41)";
++      s.op->newline() << "#if defined(STAPCONF_NETFILTER_V313) || defined(STAPCONF_NETFILTER_V313B) || defined(STAPCONF_NETFILTER_V41)";
+       s.op->newline() << "unsigned int nf_hooknum = nf_ops->hooknum;";
+       s.op->newline() << "#endif";
+       s.op->newline() << "#ifdef STAPCONF_NETFILTER_V41";
